@@ -773,10 +773,10 @@ struct MinimalSequenceWith${Implementation}Map<Element> : Sequence {
   }
 
   func map<T>(
-    @noescape _ elementTransform: (Element) throws -> T
+    @noescape _ transformation: (Element) throws -> T
   ) rethrows -> [T] {
     MinimalSequenceWithCustomMap.timesMapWasCalled += 1
-    return try _data.map(elementTransform)
+    return try _data.map(transformation)
   }
 
 %   end

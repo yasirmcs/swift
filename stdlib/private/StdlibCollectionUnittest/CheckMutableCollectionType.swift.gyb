@@ -60,10 +60,10 @@ public func withInvalidOrderings(invoke body: ((Int, Int) -> Bool) -> Void) {
 
 internal func _mapInPlace<C : MutableCollection>(
   _ elements: inout C,
-  _ elementTransform: @noescape (C.Iterator.Element) -> C.Iterator.Element
+  _ transformation: @noescape (C.Iterator.Element) -> C.Iterator.Element
 ) where C.Indices.Iterator.Element == C.Index {
   for i in elements.indices {
-    elements[i] = elementTransform(elements[i])
+    elements[i] = transformation(elements[i])
   }
 }
 

@@ -612,10 +612,10 @@ extension Sequence {
   ///     let flatMapped = numbers.flatMap { Array(count: $0, repeatedValue: $0) }
   ///     // [1, 2, 2, 3, 3, 3, 4, 4, 4, 4]
   ///
-  /// In fact, `s.flatMap(elementTransform)`  is equivalent to
-  /// `Array(s.map(elementTransform).flatten())`.
+  /// In fact, `s.flatMap(transformation)`  is equivalent to
+  /// `Array(s.map(transformation).flatten())`.
   ///
-  /// - Parameter elementTransform: A closure that accepts an element of this
+  /// - Parameter transformation: A closure that accepts an element of this
   ///   sequence as its argument and returns a sequence or collection.
   /// - Returns: The resulting flattened array.
   ///
@@ -623,11 +623,11 @@ extension Sequence {
   ///   and *n* is the length of the result.
   /// - SeeAlso: `flatten()`, `map(_:)`
   public func flatMap<SegmentOfResult : Sequence>(
-    _ elementTransform: @noescape (${GElement}) throws -> SegmentOfResult
+    _ transformation: @noescape (${GElement}) throws -> SegmentOfResult
   ) rethrows -> [SegmentOfResult.${GElement}] {
     var result: [SegmentOfResult.${GElement}] = []
     for element in self {
-      result.append(contentsOf: try elementTransform(element))
+      result.append(contentsOf: try transformation(element))
     }
     return result
   }
@@ -651,19 +651,19 @@ extension Sequence {
   ///     let flatMapped: [Int] = numbers.flatMap { str in Int(str) }
   ///     // [1, 2, 5]
   ///
-  /// - Parameter elementTransform: A closure that accepts an element of this
+  /// - Parameter transformation: A closure that accepts an element of this
   ///   sequence as its argument and returns an optional value.
-  /// - Returns: An array of the non-`nil` results of calling `elementTransform`
+  /// - Returns: An array of the non-`nil` results of calling `transformation`
   ///   with each element of the sequence.
   ///
   /// - Complexity: O(*m* + *n*), where *m* is the length of this sequence
   ///   and *n* is the length of the result.
   public func flatMap<ElementOfResult>(
-    _ elementTransform: @noescape (${GElement}) throws -> ElementOfResult?
+    _ transformation: @noescape (${GElement}) throws -> ElementOfResult?
   ) rethrows -> [ElementOfResult] {
     var result: [ElementOfResult] = []
     for element in self {
-      if let newElement = try elementTransform(element) {
+      if let newElement = try transformation(element) {
         result.append(newElement)
       }
     }

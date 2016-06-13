@@ -368,13 +368,13 @@ public protocol Sequence {
   ///     let letterCounts = cast.map { $0.characters.count }
   ///     // 'letterCounts' == [6, 6, 3, 4]
   ///
-  /// - Parameter transform: A mapping closure. `transform` accepts an
+  /// - Parameter transform: A mapping closure. `transformation` accepts an
   ///   element of this sequence as its parameter and returns a transformed
   ///   value of the same or of a different type.
   /// - Returns: An array containing the transformed elements of this
   ///   sequence.
   func map<T>(
-    _ elementTransform: @noescape (Iterator.Element) throws -> T
+    _ transformation: @noescape (Iterator.Element) throws -> T
   ) rethrows -> [T]
 
   /// Returns an array containing, in order, the elements of the sequence
@@ -709,13 +709,13 @@ extension Sequence {
   ///     let letterCounts = cast.map { $0.characters.count }
   ///     // 'letterCounts' == [6, 6, 3, 4]
   ///
-  /// - Parameter elementTransform: A mapping closure. `elementTransform` accepts an
+  /// - Parameter transformation: A mapping closure. `transformation` accepts an
   ///   element of this sequence as its parameter and returns a transformed
   ///   value of the same or of a different type.
   /// - Returns: An array containing the transformed elements of this
   ///   sequence.
   public func map<T>(
-    _ elementTransform: @noescape (Iterator.Element) throws -> T
+    _ transformation: @noescape (Iterator.Element) throws -> T
   ) rethrows -> [T] {
     let initialCapacity = underestimatedCount
     var result = ContiguousArray<T>()
@@ -725,11 +725,11 @@ extension Sequence {
 
     // Add elements up to the initial capacity without checking for regrowth.
     for _ in 0..<initialCapacity {
-      result.append(try elementTransform(iterator.next()!))
+      result.append(try transformation(iterator.next()!))
     }
     // Add remaining elements, if any.
     while let element = iterator.next() {
-      result.append(try elementTransform(element))
+      result.append(try transformation(element))
     }
     return Array(result)
   }
