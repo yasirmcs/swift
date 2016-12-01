@@ -21,6 +21,7 @@ set(SWIFT_BENCH_MODULES
     single-source/unit-tests/StackPromo
     single-source/Ackermann
     single-source/AngryPhonebook
+    single-source/AnyHashableWithAClass
     single-source/Array2D
     single-source/ArrayAppend
     single-source/ArrayInClass
@@ -37,13 +38,13 @@ set(SWIFT_BENCH_MODULES
     single-source/Chars
     single-source/ClassArrayGetter
     single-source/DeadArray
+    single-source/DictTest
+    single-source/DictTest2
+    single-source/DictTest3
     single-source/DictionaryBridge
     single-source/DictionaryLiteral
     single-source/DictionaryRemove
     single-source/DictionarySwap
-    single-source/DictTest
-    single-source/DictTest2
-    single-source/DictTest3
     single-source/ErrorHandling
     single-source/Fibonacci
     single-source/GlobalClass
@@ -51,17 +52,22 @@ set(SWIFT_BENCH_MODULES
     single-source/Hash
     single-source/Histogram
     single-source/Integrate
+    single-source/IterateData
     single-source/Join
     single-source/LinkedList
     single-source/MapReduce
     single-source/Memset
     single-source/MonteCarloE
     single-source/MonteCarloPi
-    single-source/NopDeinit
     single-source/NSDictionaryCastToSwift
     single-source/NSError
     single-source/NSStringConversion
+    single-source/NopDeinit
     single-source/ObjectAllocation
+    single-source/ObserverClosure
+    single-source/ObserverForwarderStruct
+    single-source/ObserverPartiallyAppliedMethod 
+    single-source/ObserverUnappliedMethod 
     single-source/OpenClose
     single-source/Phonebook
     single-source/PolymorphicCalls
@@ -70,10 +76,10 @@ set(SWIFT_BENCH_MODULES
     single-source/Prims
     single-source/ProtocolDispatch
     single-source/ProtocolDispatch2
-    single-source/RangeAssignment
     single-source/RC4
-    single-source/RecursiveOwnedParameter
     single-source/RGBHistogram
+    single-source/RangeAssignment
+    single-source/RecursiveOwnedParameter
     single-source/SetTests
     single-source/SevenBoom
     single-source/Sim2DArray
@@ -81,11 +87,11 @@ set(SWIFT_BENCH_MODULES
     single-source/SortStrings
     single-source/StaticArray
     single-source/StrComplexWalk
+    single-source/StrToInt
     single-source/StringBuilder
     single-source/StringInterpolation
     single-source/StringTests
     single-source/StringWalk
-    single-source/StrToInt
     single-source/SuperChars
     single-source/TwoSum
     single-source/TypeFlood
@@ -137,7 +143,8 @@ runcmd(COMMAND "xcrun" "-toolchain" "${SWIFT_DARWIN_XCRUN_TOOLCHAIN}" "-f" "clan
 # You have to delete CMakeCache.txt in the swift build to force a
 # reconfiguration.
 set(SWIFT_EXTRA_BENCH_CONFIGS CACHE STRING
-    "A semicolon separated list of benchmark configurations. Available configurations: <Optlevel>_SINGLEFILE, <Optlevel>_MULTITHREADED")
+    "A semicolon separated list of benchmark configurations. \
+Available configurations: <Optlevel>_SINGLEFILE, <Optlevel>_MULTITHREADED")
 
 # Syntax for an optset:  <optimization-level>_<configuration>
 #    where "_<configuration>" is optional.
@@ -145,6 +152,11 @@ if(NOT SWIFT_OPTIMIZATION_LEVELS)
   set(SWIFT_OPTIMIZATION_LEVELS "Onone" "O" "Ounchecked"
                                 ${SWIFT_EXTRA_BENCH_CONFIGS})
 endif()
+
+set(SWIFT_BENCHMARK_NUM_O_ITERATIONS "" CACHE STRING
+    "Number of iterations to perform when running -O benchmarks via cmake")
+set(SWIFT_BENCHMARK_NUM_ONONE_ITERATIONS "" CACHE STRING
+    "Number of iterations to perform when running -Onone benchmarks via cmake")
 
 # Options for the default (= empty) configuration
 set(BENCHOPTS "-whole-module-optimization")

@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -22,6 +22,7 @@
 #include "clang/CodeGen/ObjectFilePCHContainerOperations.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/TextDiagnosticBuffer.h"
+#include "clang/Lex/PreprocessorOptions.h"
 #include "clang/Serialization/ASTReader.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -341,11 +342,12 @@ bool ide::initInvocationByClangArguments(ArrayRef<const char *> ArgList,
     CCArgs.push_back(Entry);
   }
 
-  if (!ClangInvok->getLangOpts()->ImplementationOfModule.empty()) {
+  if (!ClangInvok->getLangOpts()->CompilingModule) {
     CCArgs.push_back("-Xclang");
-    CCArgs.push_back("-fmodule-implementation-of");
-    CCArgs.push_back("-Xclang");
-    CCArgs.push_back(ClangInvok->getLangOpts()->ImplementationOfModule);
+    llvm::SmallString<64> Str;
+    Str += "-fmodule-name=";
+    Str += ClangInvok->getLangOpts()->CurrentModule;
+    CCArgs.push_back(Str.str());
   }
 
   if (PPOpts.DetailedRecord) {

@@ -165,6 +165,16 @@ function (swift_benchmark_compile_archopts)
       set(swiftmodule "${objdir}/${module_name}.swiftmodule")
       set(source "${srcdir}/${module_name_path}.swift")
       list(APPEND SWIFT_BENCH_OBJFILES "${objfile}")
+
+      if ("${bench_flags}" MATCHES "-whole-module.*")
+        set(output_option "-o" "${objfile}")
+      else()
+        set(json "{\n  \"${source}\": { \"object\": \"${objfile}\" },\n}")
+        file(WRITE "${objdir}/${module_name}-outputmap.json" ${json})
+        set(output_option "-output-file-map"
+                          "${objdir}/${module_name}-outputmap.json")
+      endif()
+
       add_custom_command(
           OUTPUT "${objfile}"
           DEPENDS
@@ -176,9 +186,9 @@ function (swift_benchmark_compile_archopts)
           "-parse-as-library"
           ${bench_flags}
           "-module-name" "${module_name}"
-          "-emit-module" "-emit-module-path" "${swiftmodule}"
+          "-emit-module-path" "${swiftmodule}"
           "-I" "${objdir}"
-          "-o" "${objfile}"
+          ${output_option}
           "${source}")
       if (SWIFT_BENCHMARK_EMIT_SIB)
         set(sibfile "${objdir}/${module_name}.sib")
@@ -257,6 +267,7 @@ function (swift_benchmark_compile_archopts)
           ${common_options}
           ${bench_flags}
           "-parse-as-library"
+          "-emit-module-path" "${objdir}/${module_name}.swiftmodule"
           "-module-name" "${module_name}"
           "-I" "${objdir}"
           "-output-file-map" "${objdir}/${module_name}/outputmap.json"
@@ -315,7 +326,6 @@ function (swift_benchmark_compile_archopts)
       DEPENDS
         ${bench_library_objects} ${SWIFT_BENCH_OBJFILES}
         "${objcfile}"
-        "adhoc-sign-swift-stdlib-${BENCH_COMPILE_ARCHOPTS_PLATFORM}"
       COMMAND
         "${CLANG_EXEC}"
         "-fno-stack-protector"
@@ -356,19 +366,6 @@ function(swift_benchmark_compile)
     endforeach()
   endif()
 
-  add_custom_target("copy-swift-stdlib-${SWIFT_BENCHMARK_COMPILE_PLATFORM}"
-      DEPENDS ${stdlib_dependencies}
-      COMMAND
-        "${CMAKE_COMMAND}" "-E" "copy_directory"
-        "${SWIFT_LIBRARY_PATH}/${SWIFT_BENCHMARK_COMPILE_PLATFORM}"
-        "${benchmark-lib-swift-dir}/${SWIFT_BENCHMARK_COMPILE_PLATFORM}")
-
-  add_custom_target("adhoc-sign-swift-stdlib-${SWIFT_BENCHMARK_COMPILE_PLATFORM}"
-      DEPENDS "copy-swift-stdlib-${SWIFT_BENCHMARK_COMPILE_PLATFORM}"
-      COMMAND
-        "codesign" "-f" "-s" "-"
-        "${benchmark-lib-swift-dir}/${SWIFT_BENCHMARK_COMPILE_PLATFORM}/*.dylib" "2>/dev/null")
-
   set(platform_executables)
   foreach(arch ${${SWIFT_BENCHMARK_COMPILE_PLATFORM}_arch})
     set(platform_executables)
@@ -396,11 +393,11 @@ function(swift_benchmark_compile)
           COMMAND "${swift-bin-dir}/Benchmark_Driver" "run"
                   "-o" "O" "--output-dir" "${CMAKE_CURRENT_BINARY_DIR}/logs"
                   "--swift-repo" "${SWIFT_SOURCE_DIR}"
-                  "--iterations" "3"
+                  "--iterations" "${SWIFT_BENCHMARK_NUM_O_ITERATIONS}"
           COMMAND "${swift-bin-dir}/Benchmark_Driver" "run"
                   "-o" "Onone" "--output-dir" "${CMAKE_CURRENT_BINARY_DIR}/logs"
                   "--swift-repo" "${SWIFT_SOURCE_DIR}"
-                  "--iterations" "3"
+                  "--iterations" "${SWIFT_BENCHMARK_NUM_ONONE_ITERATIONS}"
           COMMAND "${swift-bin-dir}/Benchmark_Driver" "compare"
                   "--log-dir" "${CMAKE_CURRENT_BINARY_DIR}/logs"
                   "--swift-repo" "${SWIFT_SOURCE_DIR}"

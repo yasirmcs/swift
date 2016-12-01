@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -113,16 +113,17 @@
 #include "llvm/Analysis/CFG.h"
 #include "clang/CodeGen/SwiftCallingConv.h"
 
-#include "IRGenModule.h"
-#include "LoadableTypeInfo.h"
-#include "NonFixedTypeInfo.h"
-#include "ResilientTypeInfo.h"
 #include "GenMeta.h"
 #include "GenProto.h"
 #include "GenType.h"
 #include "IRGenDebugInfo.h"
+#include "IRGenModule.h"
+#include "LoadableTypeInfo.h"
+#include "NonFixedTypeInfo.h"
+#include "ResilientTypeInfo.h"
 #include "ScalarTypeInfo.h"
 #include "StructLayout.h"
+#include "SwitchBuilder.h"
 
 using namespace swift;
 using namespace irgen;
@@ -755,9 +756,12 @@ namespace {
         unreachableDefault = true;
         defaultDest = llvm::BasicBlock::Create(IGF.IGM.getLLVMContext());
       }
-
-      auto *i = IGF.Builder.CreateSwitch(discriminator, defaultDest,
-                                         dests.size());
+      
+      auto i = SwitchBuilder::create(IGF, discriminator,
+                         SwitchDefaultDest(defaultDest,
+                                     unreachableDefault ? IsUnreachable
+                                                        : IsNotUnreachable),
+                         dests.size());
       for (auto &dest : dests)
         i->addCase(getDiscriminatorIdxConst(dest.first), dest.second);
 
@@ -946,7 +950,9 @@ namespace {
     unsigned getFixedExtraInhabitantCount(IRGenModule &IGM) const override {
       unsigned bits = cast<FixedTypeInfo>(TI)->getFixedSize().getValueInBits();
       assert(bits < 32 && "freakishly huge no-payload enum");
-      return (1U << bits) - ElementsWithNoPayload.size();
+
+      size_t shifted = static_cast<size_t>(static_cast<size_t>(1) << bits);
+      return shifted - ElementsWithNoPayload.size();
     }
 
     APInt getFixedExtraInhabitantValue(IRGenModule &IGM,
@@ -1081,13 +1087,36 @@ namespace {
       return nullptr;
     }
   };
+  
+  // Use the best fitting "normal" integer size for the enum. Though LLVM
+  // theoretically supports integer types of arbitrary bit width, in practice,
+  // types other than i1 or power-of-two-byte sizes like i8, i16, etc. inhibit
+  // FastISel and expose backend bugs.
+  static unsigned getIntegerBitSizeForTag(unsigned tagBits) {
+    // i1 is used to represent bool in C so is fairly well supported.
+    if (tagBits == 1)
+      return 1;
+    // Otherwise, round the physical size in bytes up to the next power of two.
+    unsigned tagBytes = (tagBits + 7U)/8U;
+    if (!llvm::isPowerOf2_32(tagBytes))
+      tagBytes = llvm::NextPowerOf2(tagBytes);
+    
+    return Size(tagBytes).getValueInBits();
+  }
+  
+  static std::pair<Size, llvm::IntegerType *>
+  getIntegerTypeForTag(IRGenModule &IGM, unsigned tagBits) {
+    auto typeBits = getIntegerBitSizeForTag(tagBits);
+    auto typeSize = Size::forBits(typeBits);
+    return {typeSize, llvm::IntegerType::get(IGM.getLLVMContext(), typeBits)};
+  }
 
   /// Common base class for enums with one or more cases with data.
   class PayloadEnumImplStrategyBase : public EnumImplStrategy {
   protected:
     EnumPayloadSchema PayloadSchema;
     unsigned PayloadElementCount;
-    llvm::IntegerType *extraTagTy = nullptr;
+    llvm::IntegerType *ExtraTagTy = nullptr;
 
     // The number of payload bits.
     unsigned PayloadBitCount = 0;
@@ -1097,14 +1126,19 @@ namespace {
     // The number of possible values for the extra tag bits that are used.
     // Log2(NumExtraTagValues - 1) + 1 == ExtraTagBitCount
     unsigned NumExtraTagValues = ~0u;
+    
+    APInt getExtraTagBitConstant(uint64_t value) const {
+      auto bitSize = getIntegerBitSizeForTag(ExtraTagBitCount);
+      return APInt(bitSize, value);
+    }
 
     void setTaggedEnumBody(IRGenModule &IGM,
                            llvm::StructType *bodyStruct,
                            unsigned payloadBits, unsigned extraTagBits) {
-      // LLVM's ABI rules for I.O.U.S. (Integer Of Unusual Size) types is to
-      // pad them out as if aligned to the largest native integer type, even
-      // inside "packed" structs, so to accurately lay things out, we use
-      // i8 arrays for the payload and extra tag bits.
+      // Represent the payload area as a byte array in the LLVM storage type,
+      // so that we have full control of its alignment and load/store size.
+      // Integer types in LLVM tend to have unexpected alignments or store
+      // sizes.
       auto payloadArrayTy = llvm::ArrayType::get(IGM.Int8Ty,
                                                  (payloadBits+7U)/8U);
 
@@ -1118,13 +1152,15 @@ namespace {
       }
 
       if (extraTagBits > 0) {
+        Size extraTagSize;
+        std::tie(extraTagSize, ExtraTagTy)
+          = getIntegerTypeForTag(IGM, extraTagBits);
+        
         auto extraTagArrayTy = llvm::ArrayType::get(IGM.Int8Ty,
-                                                    (extraTagBits+7U)/8U);
+                                                    extraTagSize.getValue());
         body.push_back(extraTagArrayTy);
-        extraTagTy = llvm::IntegerType::get(IGM.getLLVMContext(),
-                                            extraTagBits);
       } else {
-        extraTagTy = nullptr;
+        ExtraTagTy = nullptr;
       }
       bodyStruct->setBody(body, /*isPacked*/true);
     }
@@ -1173,7 +1209,7 @@ namespace {
       });
 
       if (ExtraTagBitCount > 0)
-        schema.add(ExplosionSchema::Element::forScalar(extraTagTy));
+        schema.add(ExplosionSchema::Element::forScalar(ExtraTagTy));
     }
 
     void addToAggLowering(IRGenModule &IGM, SwiftAggLowering &lowering,
@@ -1186,7 +1222,7 @@ namespace {
 
       // Add the extra tag bits.
       if (ExtraTagBitCount > 0) {
-        auto tagStoreSize = IGM.DataLayout.getTypeStoreSize(extraTagTy);
+        auto tagStoreSize = IGM.DataLayout.getTypeStoreSize(ExtraTagTy);
         auto tagOffset = offset + getOffsetOfExtraTagBits();
         lowering.addOpaqueData(tagOffset.asCharUnits(),
                                Size(tagStoreSize).asCharUnits());
@@ -1206,11 +1242,11 @@ namespace {
       assert(ExtraTagBitCount > 0 && "does not have extra tag bits");
 
       if (PayloadElementCount == 0) {
-        return IGF.Builder.CreateBitCast(addr, extraTagTy->getPointerTo());
+        return IGF.Builder.CreateBitCast(addr, ExtraTagTy->getPointerTo());
       }
 
       addr = IGF.Builder.CreateStructGEP(addr, 1, getOffsetOfExtraTagBits());
-      return IGF.Builder.CreateElementBitCast(addr, extraTagTy);
+      return IGF.Builder.CreateElementBitCast(addr, ExtraTagTy);
     }
 
     Size getOffsetOfExtraTagBits() const {
@@ -1344,7 +1380,7 @@ namespace {
       if (ExtraTagBitCount > 0) {
         unsigned extraTagOffset = PayloadBitCount + offset;
 
-        dest.add(outerPayload.extractValue(IGF, extraTagTy, extraTagOffset));
+        dest.add(outerPayload.extractValue(IGF, ExtraTagTy, extraTagOffset));
       }
     }
   };
@@ -1695,13 +1731,14 @@ namespace {
           }
           IGF.Builder.CreateCondBr(tagBits, oneDest, zeroDest);
         } else {
-          auto *swi = IGF.Builder.CreateSwitch(tagBits, unreachableBB,
-                                               NumExtraTagValues);
+          auto swi = SwitchBuilder::create(IGF, tagBits,
+                           SwitchDefaultDest(unreachableBB, IsUnreachable),
+                           NumExtraTagValues);
 
           // If we have extra inhabitants, we need to check for them in the
           // zero-tag case. Otherwise, we switch directly to the payload case.
           tagBitBlocks.push_back(zeroDest);
-          swi->addCase(llvm::ConstantInt::get(C,APInt(ExtraTagBitCount,0)),
+          swi->addCase(llvm::ConstantInt::get(C, getExtraTagBitConstant(0)),
                        zeroDest);
           
           for (unsigned i = 1; i < NumExtraTagValues; ++i) {
@@ -1716,7 +1753,7 @@ namespace {
               bb = llvm::BasicBlock::Create(C);
               tagBitBlocks.push_back(bb);
             }
-            swi->addCase(llvm::ConstantInt::get(C, APInt(ExtraTagBitCount, i)),
+            swi->addCase(llvm::ConstantInt::get(C, getExtraTagBitConstant(i)),
                          bb);
           }
         }
@@ -1810,7 +1847,11 @@ namespace {
       auto caseIndex = emitGetEnumTag(IGF, T, addr);
 
       // Switch on the index.
-      auto *swi = IGF.Builder.CreateSwitch(caseIndex, defaultDest);
+      auto swi = SwitchBuilder::create(IGF, caseIndex,
+                         SwitchDefaultDest(defaultDest,
+                                           unreachableBB ? IsUnreachable
+                                                         : IsNotUnreachable),
+                         dests.size());
 
       auto emitCase = [&](Element elt) {
         auto tagVal =
@@ -1908,7 +1949,7 @@ namespace {
 
       APInt extraTag;
       if (ExtraTagBitCount > 0) {
-        extraTag = APInt(ExtraTagBitCount, extraTagValue);
+        extraTag = getExtraTagBitConstant(extraTagValue);
       } else {
         assert(extraTagValue == 0 &&
                "non-zero extra tag value with no tag bits");
@@ -2049,6 +2090,8 @@ namespace {
       case Normal:
         llvm_unreachable("not a refcounted payload");
       }
+
+      llvm_unreachable("Not a valid CopyDestroyStrategy");
     }
 
     void retainRefcountedPayload(IRGenFunction &IGF,
@@ -2267,7 +2310,7 @@ namespace {
       assert(TIK >= Fixed && "not fixed layout");
       assert(ExtraTagBitCount > 0 && "no extra tag bits?!");
       return llvm::ConstantInt::get(IGM.getLLVMContext(),
-                                    APInt(ExtraTagBitCount, 0));
+                                    getExtraTagBitConstant(0));
     }
 
     /// Initialize the extra tag bits, if any, to zero to indicate a payload.
@@ -2889,7 +2932,8 @@ namespace {
                                    llvm::Value *extraTagBits) const {
       unsigned numSpareBits = PayloadTagBits.count();
       llvm::Value *tag = nullptr;
-      unsigned numTagBits = numSpareBits + ExtraTagBitCount;
+      unsigned numTagBits
+        = getIntegerBitSizeForTag(numSpareBits + ExtraTagBitCount);
 
       // Get the tag bits from spare bits, if any.
       if (numSpareBits > 0) {
@@ -2903,8 +2947,7 @@ namespace {
           return extraTagBits;
         } else {
           extraTagBits = IGF.Builder.CreateZExt(extraTagBits, tag->getType());
-          extraTagBits = IGF.Builder.CreateShl(extraTagBits,
-                                               numTagBits - ExtraTagBitCount);
+          extraTagBits = IGF.Builder.CreateShl(extraTagBits, numSpareBits);
           return IGF.Builder.CreateOr(tag, extraTagBits);
         }
       }
@@ -2921,6 +2964,8 @@ namespace {
       case Normal:
         llvm_unreachable("not a refcounted payload");
       }
+
+      llvm_unreachable("Not a valid CopyDestroyStrategy.");
     }
 
     void retainRefcountedPayload(IRGenFunction &IGF,
@@ -3240,36 +3285,58 @@ namespace {
       // the default.
       if (!defaultDest)
         defaultDest = unreachableBB;
-
-      auto blockForCase = [&](EnumElementDecl *theCase) -> llvm::BasicBlock* {
-        auto found = destMap.find(theCase);
-        if (found == destMap.end())
-          return defaultDest;
-        else
-          return found->second;
-      };
+      
+      auto isUnreachable =
+        defaultDest == unreachableBB ? IsUnreachable : IsNotUnreachable;
 
       auto parts = destructureAndTagLoadableEnum(IGF, value);
+
+      // Figure out how many branches we have for the tag switch.
+      // We have one for each payload case we're switching to.
+      unsigned numPayloadBranches = std::count_if(ElementsWithPayload.begin(),
+                                                  ElementsWithPayload.end(),
+        [&](const Element &e) -> bool {
+          return destMap.find(e.decl) != destMap.end();
+        });
+      // We have one for each group of empty tags corresponding to a tag value
+      // for which we have a case corresponding to at least one member of the
+      // group.
+      unsigned numEmptyBranches = 0;
+      unsigned noPayloadI = 0;
+      unsigned casesPerTag = getNumCasesPerTag();
+      while (noPayloadI < ElementsWithNoPayload.size()) {
+        for (unsigned i = 0;
+             i < casesPerTag && noPayloadI < ElementsWithNoPayload.size();
+             ++i, ++noPayloadI) {
+          if (destMap.find(ElementsWithNoPayload[noPayloadI].decl)
+              != destMap.end()) {
+            ++numEmptyBranches;
+            noPayloadI += casesPerTag - i;
+            goto nextTag;
+          }
+        }
+      nextTag:;
+      }
 
       // Extract and switch on the tag bits.
       unsigned numTagBits
         = cast<llvm::IntegerType>(parts.tag->getType())->getBitWidth();
-      
-      auto *tagSwitch = IGF.Builder.CreateSwitch(parts.tag, unreachableBB,
-                             ElementsWithPayload.size() + NumEmptyElementTags);
+      auto tagSwitch = SwitchBuilder::create(IGF, parts.tag,
+                                 SwitchDefaultDest(defaultDest, isUnreachable),
+                                 numPayloadBranches + numEmptyBranches);
 
       // Switch over the tag bits for payload cases.
       unsigned tagIndex = 0;
       for (auto &payloadCasePair : ElementsWithPayload) {
         EnumElementDecl *payloadCase = payloadCasePair.decl;
-        tagSwitch->addCase(llvm::ConstantInt::get(C,APInt(numTagBits,tagIndex)),
-                           blockForCase(payloadCase));
+        auto found = destMap.find(payloadCase);
+        if (found != destMap.end())
+          tagSwitch->addCase(llvm::ConstantInt::get(C,APInt(numTagBits,tagIndex)),
+                             found->second);
         ++tagIndex;
       }
 
       // Switch over the no-payload cases.
-      unsigned casesPerTag = getNumCasesPerTag();
-
       auto elti = ElementsWithNoPayload.begin(),
            eltEnd = ElementsWithNoPayload.end();
 
@@ -3281,29 +3348,37 @@ namespace {
         
         // If the payload is empty, there's only one case per tag.
         if (CommonSpareBits.size() == 0) {
-          tagSwitch->addCase(tagVal, blockForCase(elti->decl));
+          auto found = destMap.find(elti->decl);
+          if (found != destMap.end())
+            tagSwitch->addCase(tagVal, found->second);
         
           ++elti;
           ++tagIndex;
           continue;
         }
         
-        auto *tagBB = llvm::BasicBlock::Create(C);
-        tagSwitch->addCase(tagVal, tagBB);
-
-        // Switch over the cases for this tag.
-        IGF.Builder.emitBlock(tagBB);
         SmallVector<std::pair<APInt, llvm::BasicBlock *>, 4> cases;
         
+        // Switch over the cases for this tag.
         for (unsigned idx = 0; idx < casesPerTag && elti != eltEnd; ++idx) {
           auto val = getEmptyCasePayload(IGF.IGM, tagIndex, idx);
-          cases.push_back({val, blockForCase(elti->decl)});
+          auto found = destMap.find(elti->decl);
+          if (found != destMap.end())
+            cases.push_back({val, found->second});
           ++elti;
         }
+        
+        if (!cases.empty()) {
+          auto *tagBB = llvm::BasicBlock::Create(C);
+          tagSwitch->addCase(tagVal, tagBB);
+          
+          IGF.Builder.emitBlock(tagBB);
 
-        parts.payload.emitSwitch(IGF, APInt::getAllOnesValue(PayloadBitCount),
-                               cases,
-                               SwitchDefaultDest(unreachableBB, IsUnreachable));
+          parts.payload.emitSwitch(IGF, APInt::getAllOnesValue(PayloadBitCount),
+                                 cases,
+                                 SwitchDefaultDest(defaultDest, isUnreachable));
+        }
+
         ++tagIndex;
       }
 
@@ -3342,18 +3417,18 @@ namespace {
       if (!defaultDest)
         defaultDest = unreachableBB;
 
-      auto *tagSwitch = IGF.Builder.CreateSwitch(tag, unreachableBB,
-                                                 NumElements);
+      auto tagSwitch = SwitchBuilder::create(IGF, tag,
+         SwitchDefaultDest(defaultDest,
+               defaultDest == unreachableBB ? IsUnreachable : IsNotUnreachable),
+         dests.size());
 
       auto emitCase = [&](Element elt) {
         auto tagVal =
             llvm::ConstantInt::get(IGF.IGM.Int32Ty,
                                    getTagIndex(elt.decl));
         auto found = destMap.find(elt.decl);
-        tagSwitch->addCase(tagVal,
-                           (found == destMap.end()
-                            ? defaultDest
-                            : found->second));
+        if (found != destMap.end())
+          tagSwitch->addCase(tagVal, found->second);
       };
 
       for (auto &elt : ElementsWithPayload)
@@ -3464,7 +3539,7 @@ namespace {
       inner.explode(IGF.IGM, dest);
       // Unpack the extra bits, if any.
       if (ExtraTagBitCount > 0)
-        dest.add(outerPayload.extractValue(IGF, extraTagTy,
+        dest.add(outerPayload.extractValue(IGF, ExtraTagTy,
                                            CommonSpareBits.size() + offset));
     }
 
@@ -3494,7 +3569,7 @@ namespace {
       if (ExtraTagBitCount > 0) {
         tag >>= numSpareBits;
         auto extra = llvm::ConstantInt::get(IGF.IGM.getLLVMContext(),
-                                            APInt(ExtraTagBitCount, tag));
+                                            getExtraTagBitConstant(tag));
         out.add(extra);
       }
     }
@@ -3532,7 +3607,7 @@ namespace {
       // If the tag bits do not fit in the spare bits, the remaining tag bits
       // are the extra tag bits.
       if (ExtraTagBitCount > 0)
-        extraTag = APInt(ExtraTagBitCount, tag >> numSpareBits);
+        extraTag = getExtraTagBitConstant(tag >> numSpareBits);
 
       return {payload, extraTag};
     }
@@ -3570,7 +3645,10 @@ namespace {
       } else if (CommonSpareBits.size() > 0) {
         // Otherwise the payload is just the index.
         payload = EnumPayload::zero(IGM, PayloadSchema);
-        payload.insertValue(IGF, tagIndex, 0);
+        // We know we won't use more than numCaseBits from tagIndex's value:
+        // We made sure of this in the logic above.
+        payload.insertValue(IGF, tagIndex, 0,
+                            numCaseBits >= 32 ? -1 : numCaseBits);
       }
 
       // If the tag bits do not fit in the spare bits, the remaining tag bits
@@ -3602,7 +3680,18 @@ namespace {
     const {
       auto *endBB = llvm::BasicBlock::Create(IGF.IGM.getLLVMContext());
 
-      auto *swi = IGF.Builder.CreateSwitch(tag, endBB);
+      unsigned numNontrivialPayloads
+        = std::count_if(ElementsWithPayload.begin(), ElementsWithPayload.end(),
+                     [](Element e) -> bool {
+                       return !e.ti->isPOD(ResilienceExpansion::Maximal);
+                     });
+
+      bool anyTrivial = !ElementsWithNoPayload.empty()
+        || numNontrivialPayloads != ElementsWithPayload.size();
+      
+      auto swi = SwitchBuilder::create(IGF, tag,
+        SwitchDefaultDest(endBB, anyTrivial ? IsNotUnreachable : IsUnreachable),
+        numNontrivialPayloads);
       auto *tagTy = cast<llvm::IntegerType>(tag->getType());
 
       // Handle nontrivial tags.
@@ -3878,13 +3967,32 @@ namespace {
         assert(PayloadTagBits.none() &&
                "address-only multi-payload enum layout cannot use spare bits");
 
+        /// True if the type is trivially copyable or takable by this operation.
+        auto isTrivial = [&](const TypeInfo &ti) -> bool {
+          return ti.isPOD(ResilienceExpansion::Maximal)
+              || (isTake && ti.isBitwiseTakable(ResilienceExpansion::Maximal));
+        };
+        
         llvm::Value *tag = loadPayloadTag(IGF, src, T);
 
         auto *endBB = llvm::BasicBlock::Create(C);
 
         /// Switch out nontrivial payloads.
         auto *trivialBB = llvm::BasicBlock::Create(C);
-        auto *swi = IGF.Builder.CreateSwitch(tag, trivialBB);
+        
+        unsigned numNontrivialPayloads
+          = std::count_if(ElementsWithPayload.begin(),
+                          ElementsWithPayload.end(),
+                          [&](Element e) -> bool {
+                            return !isTrivial(*e.ti);
+                          });
+        bool anyTrivial = !ElementsWithNoPayload.empty()
+          || numNontrivialPayloads != ElementsWithPayload.size();
+        
+        auto swi = SwitchBuilder::create(IGF, tag,
+          SwitchDefaultDest(trivialBB, anyTrivial ? IsNotUnreachable
+                                                  : IsUnreachable),
+          numNontrivialPayloads);
         auto *tagTy = cast<llvm::IntegerType>(tag->getType());
 
         unsigned tagIndex = 0;
@@ -3894,8 +4002,7 @@ namespace {
           auto &payloadTI = *payloadCasePair.ti;
           // Trivial and, in the case of a take, bitwise-takable payloads,
           // can all share the default path.
-          if (payloadTI.isPOD(ResilienceExpansion::Maximal)
-              || (isTake && payloadTI.isBitwiseTakable(ResilienceExpansion::Maximal))) {
+          if (isTrivial(payloadTI)) {
             ++tagIndex;
             continue;
           }
@@ -3933,10 +4040,20 @@ namespace {
 
         // For trivial payloads (including no-payload cases), we can just
         // primitive-copy to the destination.
-        IGF.Builder.emitBlock(trivialBB);
-        ConditionalDominanceScope condition(IGF);
-        emitPrimitiveCopy(IGF, dest, src, T);
-        IGF.Builder.CreateBr(endBB);
+        if (anyTrivial) {
+          IGF.Builder.emitBlock(trivialBB);
+          ConditionalDominanceScope condition(IGF);
+          emitPrimitiveCopy(IGF, dest, src, T);
+          IGF.Builder.CreateBr(endBB);
+        } else {
+          // If there are no trivial cases to handle, this is unreachable.
+          if (trivialBB->use_empty()) {
+            delete trivialBB;
+          } else {
+            IGF.Builder.emitBlock(trivialBB);
+            IGF.Builder.CreateUnreachable();
+          }
+        }
 
         IGF.Builder.emitBlock(endBB);
       }
@@ -4031,7 +4148,7 @@ namespace {
       if (ExtraTagBitCount > 0) {
         unsigned extraTagBits = index >> numSpareBits;
         auto *extraTagValue = llvm::ConstantInt::get(IGF.IGM.getLLVMContext(),
-                                        APInt(ExtraTagBitCount, extraTagBits));
+                                          getExtraTagBitConstant(extraTagBits));
         IGF.Builder.CreateStore(extraTagValue,
                                 projectExtraTagBits(IGF, enumAddr));
       }
@@ -4077,7 +4194,7 @@ namespace {
           extraTagValue = IGF.Builder.CreateLShr(tag, shiftCount);
         }
         extraTagValue = IGF.Builder.CreateIntCast(extraTagValue,
-                                                  extraTagTy, false);
+                                                  ExtraTagTy, false);
         IGF.Builder.CreateStore(extraTagValue,
                                 projectExtraTagBits(IGF, enumAddr));
       }
@@ -4111,7 +4228,7 @@ namespace {
 
       // Initialize the extra tag bits, if we have them.
       if (ExtraTagBitCount > 0) {
-        extraTag = IGF.Builder.CreateIntCast(extraTag, extraTagTy,
+        extraTag = IGF.Builder.CreateIntCast(extraTag, ExtraTagTy,
                                              /*signed=*/false);
         IGF.Builder.CreateStore(extraTag, projectExtraTagBits(IGF, enumAddr));
       }
@@ -4430,7 +4547,12 @@ namespace {
       if (!defaultDest)
         defaultDest = unreachableBB;
 
-      auto *tagSwitch = IGF.Builder.CreateSwitch(tag, defaultDest, NumElements);
+      auto tagSwitch = SwitchBuilder::create(IGF, tag,
+                                             SwitchDefaultDest(defaultDest,
+                                               defaultDest == unreachableBB
+                                                 ? IsUnreachable
+                                                 : IsNotUnreachable),
+                                             dests.size());
 
       auto emitCase = [&](Element elt) {
         auto tagVal =
@@ -4623,7 +4745,7 @@ namespace {
     }
     
     bool needsPayloadSizeInMetadata() const override {
-      llvm_unreachable("resilient enums cannot be defined");
+      return false;
     }
 
     void initializeMetadata(IRGenFunction &IGF,
@@ -4670,10 +4792,8 @@ namespace {
   };
 } // end anonymous namespace
 
-EnumImplStrategy *EnumImplStrategy::get(TypeConverter &TC,
-                                        SILType type,
-                                        EnumDecl *theEnum)
-{
+std::unique_ptr<EnumImplStrategy>
+EnumImplStrategy::get(TypeConverter &TC, SILType type, EnumDecl *theEnum) {
   unsigned numElements = 0;
   TypeInfoKind tik = Loadable;
   IsFixedSize_t alwaysFixedSize = IsFixedSize;
@@ -4779,43 +4899,49 @@ EnumImplStrategy *EnumImplStrategy::get(TypeConverter &TC,
          && "not all elements accounted for");
 
   if (isResilient) {
-    return new ResilientEnumImplStrategy(TC.IGM,
+    return std::unique_ptr<EnumImplStrategy>(
+            new ResilientEnumImplStrategy(TC.IGM,
                                          numElements,
                                          std::move(elementsWithPayload),
-                                         std::move(elementsWithNoPayload));
+                                         std::move(elementsWithNoPayload)));
   }
 
   // Enums imported from Clang or marked with @objc use C-compatible layout.
   if (theEnum->hasClangNode() || theEnum->isObjC()) {
     assert(elementsWithPayload.size() == 0 && "C enum with payload?!");
     assert(alwaysFixedSize == IsFixedSize && "C enum with resilient payload?!");
-    return new CCompatibleEnumImplStrategy(TC.IGM, tik, alwaysFixedSize,
+    return std::unique_ptr<EnumImplStrategy>(
+           new CCompatibleEnumImplStrategy(TC.IGM, tik, alwaysFixedSize,
                                            numElements,
                                            std::move(elementsWithPayload),
-                                           std::move(elementsWithNoPayload));
+                                           std::move(elementsWithNoPayload)));
   }
 
   if (numElements <= 1)
-    return new SingletonEnumImplStrategy(TC.IGM, tik, alwaysFixedSize,
+    return std::unique_ptr<EnumImplStrategy>(
+          new SingletonEnumImplStrategy(TC.IGM, tik, alwaysFixedSize,
                                          numElements,
                                          std::move(elementsWithPayload),
-                                         std::move(elementsWithNoPayload));
+                                         std::move(elementsWithNoPayload)));
   if (elementsWithPayload.size() > 1)
-    return new MultiPayloadEnumImplStrategy(TC.IGM, tik, alwaysFixedSize,
+    return std::unique_ptr<EnumImplStrategy>(
+           new MultiPayloadEnumImplStrategy(TC.IGM, tik, alwaysFixedSize,
                                             allowFixedLayoutOptimizations,
                                             numElements,
                                             std::move(elementsWithPayload),
-                                            std::move(elementsWithNoPayload));
+                                            std::move(elementsWithNoPayload)));
   if (elementsWithPayload.size() == 1)
-    return new SinglePayloadEnumImplStrategy(TC.IGM, tik, alwaysFixedSize,
+    return std::unique_ptr<EnumImplStrategy>(
+           new SinglePayloadEnumImplStrategy(TC.IGM, tik, alwaysFixedSize,
                                              numElements,
                                              std::move(elementsWithPayload),
-                                             std::move(elementsWithNoPayload));
+                                             std::move(elementsWithNoPayload)));
 
-  return new NoPayloadEnumImplStrategy(TC.IGM, tik, alwaysFixedSize,
+  return std::unique_ptr<EnumImplStrategy>(
+         new NoPayloadEnumImplStrategy(TC.IGM, tik, alwaysFixedSize,
                                        numElements,
                                        std::move(elementsWithPayload),
-                                       std::move(elementsWithNoPayload));
+                                       std::move(elementsWithNoPayload)));
 }
 
 namespace {
@@ -4828,6 +4954,10 @@ namespace {
     template<typename...AA>
     EnumTypeInfoBase(EnumImplStrategy &strategy, AA &&...args)
       : BaseTypeInfo(std::forward<AA>(args)...), Strategy(strategy) {}
+
+    ~EnumTypeInfoBase() {
+      delete &Strategy;
+    }
 
     llvm::StructType *getStorageType() const {
       return cast<llvm::StructType>(TypeInfo::getStorageType());
@@ -5030,8 +5160,7 @@ irgen::getEnumImplStrategy(IRGenModule &IGM, SILType ty) {
 
 const EnumImplStrategy &
 irgen::getEnumImplStrategy(IRGenModule &IGM, CanType ty) {
-  // Nominal types are always preserved through SIL lowering.
-  return getEnumImplStrategy(IGM, SILType::getPrimitiveAddressType(ty));
+  return getEnumImplStrategy(IGM, IGM.getLoweredType(ty));
 }
 
 TypeInfo *
@@ -5114,14 +5243,12 @@ NoPayloadEnumImplStrategy::completeEnumTypeLayout(TypeConverter &TC,
                                                   llvm::StructType *enumTy) {
   // Since there are no payloads, we need just enough bits to hold a
   // discriminator.
-  unsigned tagBits = llvm::Log2_32(ElementsWithNoPayload.size() - 1) + 1;
-  auto tagTy = llvm::IntegerType::get(TC.IGM.getLLVMContext(), tagBits);
-  // Round the physical size up to the next power of two.
-  unsigned tagBytes = (tagBits + 7U)/8U;
-  if (!llvm::isPowerOf2_32(tagBytes))
-    tagBytes = llvm::NextPowerOf2(tagBytes);
-  Size tagSize(tagBytes);
+  unsigned usedTagBits = llvm::Log2_32(ElementsWithNoPayload.size() - 1) + 1;
 
+  Size tagSize;
+  llvm::IntegerType *tagTy;
+  std::tie(tagSize, tagTy) = getIntegerTypeForTag(IGM, usedTagBits);
+  
   llvm::Type *body[] = { tagTy };
   enumTy->setBody(body, /*isPacked*/true);
 
@@ -5129,10 +5256,10 @@ NoPayloadEnumImplStrategy::completeEnumTypeLayout(TypeConverter &TC,
   // TODO: We can use all values greater than the largest discriminator as
   // extra inhabitants, not just those made available by spare bits.
   SpareBitVector spareBits;
-  spareBits.appendClearBits(tagBits);
+  spareBits.appendClearBits(usedTagBits);
   spareBits.extendWithSetBits(tagSize.getValueInBits());
 
-  Alignment alignment(tagBytes);
+  Alignment alignment(tagSize.getValue());
   applyLayoutAttributes(TC.IGM, Type.getSwiftRValueType(), /*fixed*/true,
                         alignment);
 
@@ -5502,11 +5629,12 @@ const TypeInfo *TypeConverter::convertEnumType(TypeBase *key, CanType type,
   SILType loweredTy = SILType::getPrimitiveAddressType(type);
 
   // Determine the implementation strategy.
-  EnumImplStrategy *strategy = EnumImplStrategy::get(*this, loweredTy, theEnum);
+  auto strategy = EnumImplStrategy::get(*this, loweredTy, theEnum).release();
 
-  // Create the TI.
-  auto *ti = strategy->completeEnumTypeLayout(*this, loweredTy,
-                                              theEnum, storageType);
+  // Create the TI.  The TI will delete the strategy in its destructor.
+  auto *ti =
+    strategy->completeEnumTypeLayout(*this, loweredTy, theEnum, storageType);
+
   // Assert that the layout query functions for fixed-layout enums work, for
   // LLDB's sake.
 #ifndef NDEBUG
@@ -5547,7 +5675,7 @@ const TypeInfo *TypeConverter::convertEnumType(TypeBase *key, CanType type,
     }
     auto tagBits = strategy->getTagBitsForPayloads();
     assert(tagBits.count() >= 32
-            || (1U << tagBits.count())
+            || static_cast<size_t>(static_cast<size_t>(1) << tagBits.count())
                >= strategy->getElementsWithPayload().size());
     DEBUG(llvm::dbgs() << "  payload tag bits:\t";
           displayBitMask(tagBits));
@@ -5562,6 +5690,12 @@ const TypeInfo *TypeConverter::convertEnumType(TypeBase *key, CanType type,
 void IRGenModule::emitEnumDecl(EnumDecl *theEnum) {
   emitEnumMetadata(*this, theEnum);
   emitNestedTypeDecls(theEnum->getMembers());
+
+  if (shouldEmitOpaqueTypeMetadataRecord(theEnum)) {
+    emitOpaqueTypeMetadataRecord(theEnum);
+    return;
+  }
+
   emitFieldMetadataRecord(theEnum);
 }
 
@@ -5614,67 +5748,6 @@ void irgen::emitStoreEnumTagToAddress(IRGenFunction &IGF,
                                        EnumElementDecl *theCase) {
   getEnumImplStrategy(IGF.IGM, enumTy)
     .storeTag(IGF, enumTy, enumAddr, theCase);
-}
-
-/// Gather spare bits into the low bits of a smaller integer value.
-llvm::Value *irgen::emitGatherSpareBits(IRGenFunction &IGF,
-                                        const SpareBitVector &spareBitMask,
-                                        llvm::Value *spareBits,
-                                        unsigned resultLowBit,
-                                        unsigned resultBitWidth) {
-  auto destTy
-    = llvm::IntegerType::get(IGF.IGM.getLLVMContext(), resultBitWidth);
-  unsigned usedBits = resultLowBit;
-  llvm::Value *result = nullptr;
-
-  auto spareBitEnumeration = spareBitMask.enumerateSetBits();
-  for (auto optSpareBit = spareBitEnumeration.findNext();
-       optSpareBit.hasValue() && usedBits < resultBitWidth;
-       optSpareBit = spareBitEnumeration.findNext()) {
-    unsigned u = optSpareBit.getValue();
-    assert(u >= (usedBits - resultLowBit) &&
-           "used more bits than we've processed?!");
-
-    // Shift the bits into place.
-    llvm::Value *newBits;
-    if (u > usedBits)
-      newBits = IGF.Builder.CreateLShr(spareBits, u - usedBits);
-    else if (u < usedBits)
-      newBits = IGF.Builder.CreateShl(spareBits, usedBits - u);
-    else
-      newBits = spareBits;
-    newBits = IGF.Builder.CreateZExtOrTrunc(newBits, destTy);
-
-    // See how many consecutive bits we have.
-    unsigned numBits = 1;
-    ++u;
-    // We don't need more bits than the size of the result.
-    unsigned maxBits = resultBitWidth - usedBits;
-    for (unsigned e = spareBitMask.size();
-         u < e && numBits < maxBits && spareBitMask[u];
-         ++u) {
-      ++numBits;
-      (void) spareBitEnumeration.findNext();
-    }
-
-    // Mask out the selected bits.
-    auto val = APInt::getAllOnesValue(numBits);
-    if (numBits < resultBitWidth)
-      val = val.zext(resultBitWidth);
-    val = val.shl(usedBits);
-    auto *mask = llvm::ConstantInt::get(IGF.IGM.getLLVMContext(), val);
-    newBits = IGF.Builder.CreateAnd(newBits, mask);
-
-    // Accumulate the result.
-    if (result)
-      result = IGF.Builder.CreateOr(result, newBits);
-    else
-      result = newBits;
-
-    usedBits += numBits;
-  }
-
-  return result;
 }
 
 /// Scatter spare bits from the low bits of an integer value.

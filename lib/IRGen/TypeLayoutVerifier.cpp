@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -42,8 +42,11 @@ irgen::emitTypeLayoutVerifier(IRGenFunction &IGF,
                                               verifierArgTys,
                                               /*var arg*/ false);
   auto verifierFn = IGF.IGM.Module.getOrInsertFunction(
-                                       "_swift_debug_verifyTypeLayoutAttribute",
-                                       verifierFnTy);
+      "_swift_debug_verifyTypeLayoutAttribute", verifierFnTy);
+  if (IGF.IGM.Triple.isOSBinFormatCOFF())
+    if (auto *F = dyn_cast<llvm::Function>(verifierFn))
+      F->setDLLStorageClass(llvm::GlobalValue::DLLImportStorageClass);
+
   struct VerifierArgumentBuffers {
     Address runtimeBuf, staticBuf;
   };

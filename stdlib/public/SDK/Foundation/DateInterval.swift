@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -156,36 +156,43 @@ public struct DateInterval : ReferenceConvertible, Comparable, Hashable {
     
     public var hashValue: Int {
         var buf: (UInt, UInt) = (UInt(start.timeIntervalSinceReferenceDate), UInt(end.timeIntervalSinceReferenceDate))
-        return withUnsafeMutablePointer(&buf) {
-            return Int(bitPattern: CFHashBytes(unsafeBitCast($0, to: UnsafeMutablePointer<UInt8>.self), CFIndex(sizeof(UInt) * 2)))
+        return withUnsafeMutablePointer(to: &buf) {
+            return Int(bitPattern: CFHashBytes(unsafeBitCast($0, to: UnsafeMutablePointer<UInt8>.self), CFIndex(MemoryLayout<UInt>.size * 2)))
         }
     }
     
+    @available(OSX 10.12, iOS 10.0, watchOS 3.0, tvOS 10.0, *)
+    public static func ==(lhs: DateInterval, rhs: DateInterval) -> Bool {
+        return lhs.start == rhs.start && lhs.duration == rhs.duration
+    }
+
+    @available(OSX 10.12, iOS 10.0, watchOS 3.0, tvOS 10.0, *)
+    public static func <(lhs: DateInterval, rhs: DateInterval) -> Bool {
+        return lhs.compare(rhs) == .orderedAscending
+    }
+}
+
+@available(OSX 10.12, iOS 10.0, watchOS 3.0, tvOS 10.0, *)
+extension DateInterval : CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     public var description: String {
-        return "(Start Date) \(start) + (Duration) \(duration) seconds = (End Date) \(end)"
+        return "\(start) to \(end)"
     }
     
     public var debugDescription: String {
         return description
     }
-}
 
-@available(OSX 10.12, iOS 10.0, watchOS 3.0, tvOS 10.0, *)
-public func ==(lhs: DateInterval, rhs: DateInterval) -> Bool {
-    return lhs.start == rhs.start && lhs.duration == rhs.duration
-}
-
-@available(OSX 10.12, iOS 10.0, watchOS 3.0, tvOS 10.0, *)
-public func <(lhs: DateInterval, rhs: DateInterval) -> Bool {
-    return lhs.compare(rhs) == .orderedAscending
+    public var customMirror: Mirror {
+        var c: [(label: String?, value: Any)] = []
+        c.append((label: "start", value: start))
+        c.append((label: "end", value: end))
+        c.append((label: "duration", value: duration))
+        return Mirror(self, children: c, displayStyle: Mirror.DisplayStyle.struct)
+    }
 }
 
 @available(OSX 10.12, iOS 10.0, watchOS 3.0, tvOS 10.0, *)
 extension DateInterval : _ObjectiveCBridgeable {
-    public static func _isBridgedToObjectiveC() -> Bool {
-        return true
-    }
-    
     public static func _getObjectiveCType() -> Any.Type {
         return NSDateInterval.self
     }
@@ -207,8 +214,18 @@ extension DateInterval : _ObjectiveCBridgeable {
     }
 
     public static func _unconditionallyBridgeFromObjectiveC(_ source: NSDateInterval?) -> DateInterval {
-        var result: DateInterval? = nil
+        var result: DateInterval?
         _forceBridgeFromObjectiveC(source!, result: &result)
         return result!
     }
 }
+
+@available(OSX 10.12, iOS 10.0, watchOS 3.0, tvOS 10.0, *)
+extension NSDateInterval : _HasCustomAnyHashableRepresentation {
+    // Must be @nonobjc to avoid infinite recursion during bridging.
+    @nonobjc
+    public func _toCustomAnyHashable() -> AnyHashable? {
+        return AnyHashable(self as DateInterval)
+    }
+}
+

@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -37,8 +37,6 @@ llvm::raw_ostream &swift::operator<<(llvm::raw_ostream &OS, PatternKind kind) {
     return OS << "pattern type annotation";
   case PatternKind::Is:
     return OS << "prefix 'is' pattern";
-  case PatternKind::NominalType:
-    return OS << "type destructuring pattern";
   case PatternKind::Expr:
     return OS << "expression pattern";
   case PatternKind::Var:
@@ -167,11 +165,6 @@ void Pattern::forEachVariable(const std::function<void(VarDecl*)> &fn) const {
       elt.getPattern()->forEachVariable(fn);
     return;
 
-  case PatternKind::NominalType:
-    for (auto elt : cast<NominalTypePattern>(this)->getElements())
-      elt.getSubPattern()->forEachVariable(fn);
-    return;
-
   case PatternKind::EnumElement:
     if (auto SP = cast<EnumElementPattern>(this)->getSubPattern())
       SP->forEachVariable(fn);
@@ -218,11 +211,6 @@ void Pattern::forEachNode(const std::function<void(Pattern*)> &f) {
   case PatternKind::Tuple:
     for (auto elt : cast<TuplePattern>(this)->getElements())
       elt.getPattern()->forEachNode(f);
-    return;
-
-  case PatternKind::NominalType:
-    for (auto elt : cast<NominalTypePattern>(this)->getElements())
-      elt.getSubPattern()->forEachNode(f);
     return;
 
   case PatternKind::EnumElement: {
@@ -361,7 +349,7 @@ SourceRange TuplePattern::getSourceRange() const {
 }
 
 SourceRange TypedPattern::getSourceRange() const {
-  if (isImplicit()) {
+  if (isImplicit() || isPropagatedType()) {
     // If a TypedPattern is implicit, then its type is definitely implicit, so
     // we should ignore its location.  On the other hand, the sub-pattern can
     // be explicit or implicit.
@@ -374,14 +362,3 @@ SourceRange TypedPattern::getSourceRange() const {
   return { SubPattern->getSourceRange().Start, PatType.getSourceRange().End };
 }
 
-NominalTypePattern *NominalTypePattern::create(TypeLoc CastTy,
-                                               SourceLoc LParenLoc,
-                                               ArrayRef<Element> Elements,
-                                               SourceLoc RParenLoc,
-                                               ASTContext &C,
-                                               Optional<bool> implicit) {
-  void *buf = C.Allocate(totalSizeToAlloc<Element>(Elements.size()),
-                         alignof(Element));
-  return ::new (buf) NominalTypePattern(CastTy, LParenLoc, Elements, RParenLoc,
-                                        implicit);
-}

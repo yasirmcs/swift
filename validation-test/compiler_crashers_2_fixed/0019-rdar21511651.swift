@@ -1,4 +1,4 @@
-// RUN: not %target-swift-frontend %s -parse
+// RUN: not %target-swift-frontend %s -typecheck
 
 internal protocol _SequenceWrapper {
   typealias Base : Sequence
@@ -26,7 +26,7 @@ extension Sequence
   /// If `self` is multi-pass (i.e., a `Collection`), invoke
   /// `preprocess` on `self` and return its result.  Otherwise, return
   /// `nil`.
-  public func _preprocessingPass<R>(@noescape _ preprocess: (Self) -> R) -> R? {
+  public func _preprocessingPass<R>(_ preprocess: (Self) -> R) -> R? {
     return _base._preprocessingPass { _ in preprocess(self) }
   }
 
@@ -148,8 +148,8 @@ public extension Sequence
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 

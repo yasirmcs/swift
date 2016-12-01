@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -77,8 +77,13 @@ getClangBuiltinTypeFromKind(const clang::ASTContext &context,
   case clang::BuiltinType::Id:                                                 \
     return context.SingletonId;
 #include "clang/AST/BuiltinTypes.def"
+#define IMAGE_TYPE(ImgType, Id, SingletonId, Access, Suffix)                   \
+  case clang::BuiltinType::Id:                                                 \
+    return context.SingletonId;
+#include "clang/Basic/OpenCLImageTypes.def"
   }
-  llvm_unreachable("Unexpected builtin type!");
+
+  llvm_unreachable("Not a valid BuiltinType.");
 }
 
 static clang::CanQualType getClangSelectorType(
@@ -213,6 +218,8 @@ clang::CanQualType GenClangType::visitStructType(CanStructType type) {
                    ctx.VoidPtrTy);
   CHECK_NAMED_TYPE("ObjCBool", ctx.ObjCBuiltinBoolTy);
   CHECK_NAMED_TYPE("Selector", getClangSelectorType(ctx));
+  CHECK_NAMED_TYPE("UnsafeRawPointer", ctx.VoidPtrTy);
+  CHECK_NAMED_TYPE("UnsafeMutableRawPointer", ctx.VoidPtrTy);
 #undef CHECK_NAMED_TYPE
 
   // Map vector types to the corresponding C vectors.
@@ -419,9 +426,8 @@ clang::CanQualType
 GenClangType::visitBoundGenericType(CanBoundGenericType type) {
   // We only expect *Pointer<T>, ImplicitlyUnwrappedOptional<T>, and Optional<T>.
   // The first two are structs; the last is an enum.
-  OptionalTypeKind OTK;
-  if (auto underlyingTy = SILType::getPrimitiveObjectType(type)
-        .getAnyOptionalObjectType(IGM.getSILModule(), OTK)) {
+  if (auto underlyingTy =
+        SILType::getPrimitiveObjectType(type).getAnyOptionalObjectType()) {
     // The underlying type could be a bridged type, which makes any
     // sort of casual assertion here difficult.
     return Converter.convert(IGM, underlyingTy.getSwiftRValueType());
@@ -486,9 +492,16 @@ GenClangType::visitBoundGenericType(CanBoundGenericType type) {
     return getCanonicalType(fnPtrTy);
   }
   }
+
+  llvm_unreachable("Not a valid StructKind.");
 }
 
 clang::CanQualType GenClangType::visitEnumType(CanEnumType type) {
+  // Special case: Uninhabited enums are not @objc, so we don't
+  // know what to do below, but we can just convert to 'void'.
+  if (type->isUninhabited())
+    return Converter.convert(IGM, IGM.Context.TheEmptyTupleType);
+
   assert(type->getDecl()->isObjC() && "not an @objc enum?!");
   
   // @objc enums lower to their raw types.
@@ -566,6 +579,7 @@ clang::CanQualType GenClangType::visitSILFunctionType(CanSILFunctionType type) {
   case SILFunctionType::Representation::Method:
   case SILFunctionType::Representation::ObjCMethod:
   case SILFunctionType::Representation::WitnessMethod:
+  case SILFunctionType::Representation::Closure:
     llvm_unreachable("not an ObjC-compatible function");
   }
   
@@ -735,15 +749,6 @@ clang::CanQualType ClangTypeConverter::convert(IRGenModule &IGM, CanType type) {
                             1);
         auto ptrTy = ctx.getObjCObjectPointerType(clangType);
         return ctx.getCanonicalType(ptrTy);
-      }
-    } else if (decl == IGM.Context.getBoolDecl()) {
-      // FIXME: Handle _Bool and DarwinBoolean.
-      auto &ctx = IGM.getClangASTContext();
-      auto &TI = ctx.getTargetInfo();
-      // FIXME: Figure out why useSignedCharForObjCBool() returns
-      // 'true' on Linux
-      if (IGM.ObjCInterop && TI.useSignedCharForObjCBool()) {
-        return ctx.SignedCharTy;
       }
     }
   }

@@ -1,4 +1,4 @@
-add_swift_library(swiftIRGen
+add_swift_library(swiftIRGen STATIC
   DebugTypeInfo.cpp
   EnumPayload.cpp
   ExtraInhabitants.cpp
@@ -10,6 +10,7 @@ add_swift_library(swiftIRGen
   GenClangDecl.cpp
   GenClangType.cpp
   GenClass.cpp
+  GenConstant.cpp
   GenControl.cpp
   GenCoverage.cpp
   GenDecl.cpp

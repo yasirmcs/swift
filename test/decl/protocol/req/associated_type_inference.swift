@@ -1,4 +1,4 @@
-// RUN: %target-parse-verify-swift
+// RUN: %target-typecheck-verify-swift
 
 protocol P0 {
   associatedtype Assoc1 : PSimple // expected-note{{ambiguous inference of associated type 'Assoc1': 'Double' vs. 'Int'}}
@@ -171,7 +171,7 @@ public protocol Thenable {
 }
 
 public class CorePromise<T> : Thenable { // expected-error{{type 'CorePromise<T>' does not conform to protocol 'Thenable'}}
-    public func then(_ success: (t: T, _: CorePromise<T>) -> T) -> Self {
+    public func then(_ success: @escaping (_ t: T, _: CorePromise<T>) -> T) -> Self {
         return self.then() { (t: T) -> T in
             return success(t: t, self)
         }

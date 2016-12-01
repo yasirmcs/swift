@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -48,10 +48,10 @@ extension String.Index {
     _ unicodeScalarIndex: String.UnicodeScalarIndex,
     within other: String
   ) {
-    if !unicodeScalarIndex._isOnGraphemeClusterBoundary {
+    if !other.unicodeScalars._isOnGraphemeClusterBoundary(unicodeScalarIndex) {
       return nil
     }
-    self.init(_base: unicodeScalarIndex)
+    self.init(_base: unicodeScalarIndex, in: other.characters)
   }
 
   /// Creates an index in the given string that corresponds exactly to the

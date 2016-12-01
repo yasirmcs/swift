@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -21,7 +21,7 @@ extension String.UTF16View.Index : Strideable {
   }
 
   public func distance(to other: String.UTF16View.Index) -> Int {
-    return other._offset.distance(to: _offset)
+    return _offset.distance(to: other._offset)
   }
 
   public func advanced(by n: Int) -> String.UTF16View.Index {

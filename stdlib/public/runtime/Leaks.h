@@ -5,14 +5,14 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
 // This is a very simple leak detector implementation that detects objects that
 // are allocated but not deallocated in a region. It is purposefully behind a
-// flag since it is not meant to be used in
+// flag since it is not meant to be used in production yet.
 //
 //===----------------------------------------------------------------------===//
 

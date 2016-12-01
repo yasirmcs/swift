@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -22,8 +22,8 @@
 #include "swift/AST/ConcreteDeclRef.h"
 #include "swift/AST/DiagnosticEngine.h"
 #include "swift/AST/DiagnosticsSema.h"
-#include "swift/AST/ExprHandle.h"
 #include "swift/AST/ForeignErrorConvention.h"
+#include "swift/AST/GenericEnvironment.h"
 #include "swift/AST/KnownProtocols.h"
 #include "swift/AST/LazyResolver.h"
 #include "swift/AST/ModuleLoader.h"
@@ -75,6 +75,10 @@ namespace {
   };
 }
 
+using AssociativityCacheType =
+  llvm::DenseMap<std::pair<PrecedenceGroupDecl *, PrecedenceGroupDecl *>,
+                 Associativity>;
+
 struct ASTContext::Implementation {
   Implementation();
   ~Implementation();
@@ -89,38 +93,25 @@ struct ASTContext::Implementation {
 
   llvm::StringMap<char, llvm::BumpPtrAllocator&> IdentifierTable;
 
-  /// The declaration of Swift.Bool.
-  NominalTypeDecl *BoolDecl = nullptr;
+  /// The declaration of Swift.AssignmentPrecedence.
+  PrecedenceGroupDecl *AssignmentPrecedence = nullptr;
 
-  /// The declaration of Swift.Int.
-  NominalTypeDecl *IntDecl = nullptr;
+  /// The declaration of Swift.CastingPrecedence.
+  PrecedenceGroupDecl *CastingPrecedence = nullptr;
 
-  /// The declaration of Swift.UInt.
-  NominalTypeDecl *UIntDecl = nullptr;
+  /// The declaration of Swift.FunctionArrowPrecedence.
+  PrecedenceGroupDecl *FunctionArrowPrecedence = nullptr;
 
-  /// The declaration of Swift.Float.
-  NominalTypeDecl *FloatDecl = nullptr;
+  /// The declaration of Swift.TernaryPrecedence.
+  PrecedenceGroupDecl *TernaryPrecedence = nullptr;
 
-  /// The declaration of Swift.Double.
-  NominalTypeDecl *DoubleDecl = nullptr;
+  /// The declaration of Swift.DefaultPrecedence.
+  PrecedenceGroupDecl *DefaultPrecedence = nullptr;
 
-  /// The declaration of Swift.String.
-  NominalTypeDecl *StringDecl = nullptr;
-
-  /// The declaration of Swift.Array<T>.
-  NominalTypeDecl *ArrayDecl = nullptr;
-
-  /// The declaration of Swift.Set<T>.
-  NominalTypeDecl *SetDecl = nullptr;
-
-  /// The declaration of Swift.Sequence<T>.
-  NominalTypeDecl *SequenceDecl = nullptr;
-
-  /// The declaration of Swift.Dictionary<T>.
-  NominalTypeDecl *DictionaryDecl = nullptr;
-
-  /// The declaration of Swift.Optional<T>.
-  EnumDecl *OptionalDecl = nullptr;
+#define KNOWN_STDLIB_TYPE_DECL(NAME, DECL_CLASS, NUM_GENERIC_PARAMS) \
+  /** The declaration of Swift.NAME. */ \
+  DECL_CLASS *NAME##Decl = nullptr;
+#include "swift/AST/KnownStdlibTypes.def"
 
   /// The declaration of Swift.Optional<T>.Some.
   EnumElementDecl *OptionalSomeDecl = nullptr;
@@ -128,56 +119,47 @@ struct ASTContext::Implementation {
   /// The declaration of Swift.Optional<T>.None.
   EnumElementDecl *OptionalNoneDecl = nullptr;
 
-  /// The declaration of Swift.OptionSet.
-  NominalTypeDecl *OptionSetDecl = nullptr;
-
   /// The declaration of Swift.ImplicitlyUnwrappedOptional<T>.Some.
   EnumElementDecl *ImplicitlyUnwrappedOptionalSomeDecl = nullptr;
 
   /// The declaration of Swift.ImplicitlyUnwrappedOptional<T>.None.
   EnumElementDecl *ImplicitlyUnwrappedOptionalNoneDecl = nullptr;
   
-  /// The declaration of Swift.UnsafeMutablePointer<T>.
-  NominalTypeDecl *UnsafeMutablePointerDecl = nullptr;
+  /// The declaration of Swift.UnsafeMutableRawPointer.memory.
+  VarDecl *UnsafeMutableRawPointerMemoryDecl = nullptr;
+
+  /// The declaration of Swift.UnsafeRawPointer.memory.
+  VarDecl *UnsafeRawPointerMemoryDecl = nullptr;
+
+  /// The declaration of Swift.UnsafeMutablePointer<T>.memory.
   VarDecl *UnsafeMutablePointerMemoryDecl = nullptr;
   
-  /// The declaration of Swift.UnsafePointer<T>.
-  NominalTypeDecl *UnsafePointerDecl = nullptr;
+  /// The declaration of Swift.UnsafePointer<T>.memory.
   VarDecl *UnsafePointerMemoryDecl = nullptr;
   
-  /// The declaration of Swift.OpaquePointer.
-  NominalTypeDecl *OpaquePointerDecl = nullptr;
-  
-  /// The declaration of Swift.AutoreleasingUnsafeMutablePointer<T>.
-  NominalTypeDecl *AutoreleasingUnsafeMutablePointerDecl = nullptr;
+  /// The declaration of Swift.AutoreleasingUnsafeMutablePointer<T>.memory.
   VarDecl *AutoreleasingUnsafeMutablePointerMemoryDecl = nullptr;
-
-  /// The declaration of Swift.Unmanaged<T>
-  NominalTypeDecl *UnmanagedDecl = nullptr;
 
   /// The declaration of Swift.Void.
   TypeAliasDecl *VoidDecl = nullptr;
-
-  /// The declaration of Swift.Any.
-  TypeAliasDecl *AnyDecl = nullptr;
-
+  
   /// The declaration of ObjectiveC.ObjCBool.
   StructDecl *ObjCBoolDecl = nullptr;
+
+  /// The declaration of Foundation.NSError.
+  ClassDecl *NSErrorDecl = nullptr;
 
   // Declare cached declarations for each of the known declarations.
 #define FUNC_DECL(Name, Id) FuncDecl *Get##Name = nullptr;
 #include "swift/AST/KnownDecls.def"
   
-  /// The declaration of Swift.ImplicitlyUnwrappedOptional<T>.
-  EnumDecl *ImplicitlyUnwrappedOptionalDecl = nullptr;
-
   /// func _getBool(Builtin.Int1) -> Bool
   FuncDecl *GetBoolDecl = nullptr;
   
   /// func ==(Int, Int) -> Bool
   FuncDecl *EqualIntDecl = nullptr;
 
-  /// func _unimplemented_initializer(className: StaticString).
+  /// func _unimplementedInitializer(className: StaticString).
   FuncDecl *UnimplementedInitializerDecl = nullptr;
 
   /// func _undefined<T>(msg: StaticString, file: StaticString, line: UInt) -> T
@@ -212,6 +194,9 @@ struct ASTContext::Implementation {
   llvm::DenseMap<const AbstractFunctionDecl *,
                  ForeignErrorConvention> ForeignErrorConventions;
 
+  /// Cache of previously looked-up precedence queries.
+  AssociativityCacheType AssociativityCache;
+
   /// Map from normal protocol conformances to diagnostics that have
   /// been delayed until the conformance is fully checked.
   llvm::DenseMap<NormalProtocolConformance *,
@@ -222,12 +207,6 @@ struct ASTContext::Implementation {
   llvm::DenseMap<Decl *, std::pair<LazyMemberLoader *, uint64_t>>
     ConformanceLoaders;
 
-  /// \brief A cached unused pattern-binding initializer context.
-  PatternBindingInitializer *UnusedPatternBindingContext = nullptr;
-
-  /// \brief A cached unused default-argument initializer context.
-  DefaultArgumentInitializer *UnusedDefaultArgumentContext = nullptr;
-
   /// Mapping from archetypes with lazily-resolved nested types to the
   /// archetype builder and potential archetype corresponding to that
   /// archetype.
@@ -236,9 +215,11 @@ struct ASTContext::Implementation {
                            ArchetypeBuilder::PotentialArchetype *>>
     LazyArchetypes;
 
-  /// \brief Stored archetype builders.
+  /// \brief Stored archetype builders and their corresponding (canonical)
+  /// generic environments.
   llvm::DenseMap<std::pair<GenericSignature *, ModuleDecl *>,
-                 std::unique_ptr<ArchetypeBuilder>> ArchetypeBuilders;
+  std::pair<std::unique_ptr<ArchetypeBuilder>,
+            GenericEnvironment *>> ArchetypeBuilders;
 
   /// The set of property names that show up in the defining module of a
   /// class.
@@ -249,10 +230,14 @@ struct ASTContext::Implementation {
   /// an Objective-C class.
   llvm::DenseMap<std::pair<const clang::ObjCInterfaceDecl *, char>,
                  std::unique_ptr<InheritedNameSet>> AllPropertiesObjC;
+  
+  /// The single-parameter generic signature with no constraints, <T>.
+  CanGenericSignature SingleGenericParameterSignature;
 
   /// \brief Structure that captures data that is segregated into different
   /// arenas.
   struct Arena {
+    llvm::DenseMap<Type, ErrorType *> ErrorTypesWithOriginal;
     llvm::FoldingSet<TupleType> TupleTypes;
     llvm::DenseMap<std::pair<Type,char>, MetatypeType*> MetatypeTypes;
     llvm::DenseMap<std::pair<Type,char>,
@@ -263,7 +248,7 @@ struct ASTContext::Implementation {
     llvm::DenseMap<std::pair<Type, Type>, DictionaryType *> DictionaryTypes;
     llvm::DenseMap<Type, OptionalType*> OptionalTypes;
     llvm::DenseMap<Type, ImplicitlyUnwrappedOptionalType*> ImplicitlyUnwrappedOptionalTypes;
-    llvm::DenseMap<Type, ParenType*> ParenTypes;
+    llvm::DenseMap<std::pair<Type, unsigned>, ParenType*> ParenTypes;
     llvm::DenseMap<uintptr_t, ReferenceStorageType*> ReferenceStorageTypes;
     llvm::DenseMap<Type, LValueType*> LValueTypes;
     llvm::DenseMap<Type, InOutType*> InOutTypes;
@@ -347,12 +332,8 @@ struct ASTContext::Implementation {
     /// The allocator used for all allocations within this arena.
     llvm::BumpPtrAllocator &Allocator;
 
-    /// Callback used to get a type member of a type variable.
-    GetTypeVariableMemberCallback GetTypeMember;
-
-    ConstraintSolverArena(llvm::BumpPtrAllocator &allocator,
-                          GetTypeVariableMemberCallback &&getTypeMember)
-      : Allocator(allocator), GetTypeMember(std::move(getTypeMember)) { }
+    ConstraintSolverArena(llvm::BumpPtrAllocator &allocator)
+      : Allocator(allocator) { }
 
     ConstraintSolverArena(const ConstraintSolverArena &) = delete;
     ConstraintSolverArena(ConstraintSolverArena &&) = delete;
@@ -374,6 +355,8 @@ struct ASTContext::Implementation {
     }
     llvm_unreachable("bad AllocationArena");
   }
+  
+  llvm::FoldingSet<SILLayout> *SILLayouts = nullptr;
 };
 
 ASTContext::Implementation::Implementation()
@@ -384,14 +367,11 @@ ASTContext::Implementation::~Implementation() {
 }
 
 ConstraintCheckerArenaRAII::
-ConstraintCheckerArenaRAII(ASTContext &self, llvm::BumpPtrAllocator &allocator,
-                           GetTypeVariableMemberCallback getTypeMember)
+ConstraintCheckerArenaRAII(ASTContext &self, llvm::BumpPtrAllocator &allocator)
   : Self(self), Data(self.Impl.CurrentConstraintSolverArena.release())
 {
   Self.Impl.CurrentConstraintSolverArena.reset(
-    new ASTContext::Implementation::ConstraintSolverArena(
-          allocator,
-          std::move(getTypeMember)));
+    new ASTContext::Implementation::ConstraintSolverArena(allocator));
 }
 
 ConstraintCheckerArenaRAII::~ConstraintCheckerArenaRAII() {
@@ -416,10 +396,12 @@ ASTContext::ASTContext(LangOptions &langOpts, SearchPathOptions &SearchPathOpts,
     StdlibModuleName(getIdentifier(STDLIB_NAME)),
     SwiftShimsModuleName(getIdentifier(SWIFT_SHIMS_NAME)),
     TypeCheckerDebug(new StderrTypeCheckerDebugConsumer()),
-    TheErrorType(new (*this, AllocationArena::Permanent) ErrorType(*this)),
+    TheErrorType(
+      new (*this, AllocationArena::Permanent) ErrorType(*this, Type())),
     TheUnresolvedType(new (*this, AllocationArena::Permanent)
                       UnresolvedType(*this)),
     TheEmptyTupleType(TupleType::get(ArrayRef<TupleTypeElt>(), *this)),
+    TheAnyType(ProtocolCompositionType::get(*this, ArrayRef<Type>())),
     TheNativeObjectType(new (*this, AllocationArena::Permanent)
                            BuiltinNativeObjectType(*this)),
     TheBridgeObjectType(new (*this, AllocationArena::Permanent)
@@ -530,44 +512,17 @@ static NominalTypeDecl *findStdlibType(const ASTContext &ctx, StringRef name,
   return nullptr;
 }
 
-NominalTypeDecl *ASTContext::getBoolDecl() const {
-  if (!Impl.BoolDecl)
-    Impl.BoolDecl = findStdlibType(*this, "Bool", 0);
-  return Impl.BoolDecl;
-}
-
-NominalTypeDecl *ASTContext::getIntDecl() const {
-  if (!Impl.IntDecl)
-    Impl.IntDecl = findStdlibType(*this, "Int", 0);
-  return Impl.IntDecl;
-}
-
-NominalTypeDecl *ASTContext::getUIntDecl() const {
-  if (!Impl.UIntDecl)
-    Impl.UIntDecl = findStdlibType(*this, "UInt", 0);
-  return Impl.UIntDecl;
-}
-
-NominalTypeDecl *ASTContext::getFloatDecl() const {
-  if (!Impl.FloatDecl)
-    Impl.FloatDecl = findStdlibType(*this, "Float", 0);
-  return Impl.FloatDecl;
-}
-
-NominalTypeDecl *ASTContext::getDoubleDecl() const {
-  if (!Impl.DoubleDecl)
-    Impl.DoubleDecl = findStdlibType(*this, "Double", 0);
-  return Impl.DoubleDecl;
-}
-
-NominalTypeDecl *ASTContext::getStringDecl() const {
-  if (!Impl.StringDecl)
-    Impl.StringDecl = findStdlibType(*this, "String", 0);
-  return Impl.StringDecl;
-}
+#define KNOWN_STDLIB_TYPE_DECL(NAME, DECL_CLASS, NUM_GENERIC_PARAMS) \
+  DECL_CLASS *ASTContext::get##NAME##Decl() const { \
+    if (!Impl.NAME##Decl) \
+      Impl.NAME##Decl = dyn_cast_or_null<DECL_CLASS>( \
+        findStdlibType(*this, #NAME, NUM_GENERIC_PARAMS)); \
+    return Impl.NAME##Decl; \
+  }
+#include "swift/AST/KnownStdlibTypes.def"
 
 CanType ASTContext::getExceptionType() const {
-  if (auto exn = getErrorProtocolDecl()) {
+  if (auto exn = getErrorDecl()) {
     return exn->getDeclaredType()->getCanonicalType();
   } else {
     // Use Builtin.NativeObject just as a stand-in.
@@ -575,32 +530,8 @@ CanType ASTContext::getExceptionType() const {
   }
 }
 
-NominalTypeDecl *ASTContext::getErrorProtocolDecl() const {
-  return getProtocol(KnownProtocolKind::ErrorProtocol);
-}
-
-NominalTypeDecl *ASTContext::getArrayDecl() const {
-  if (!Impl.ArrayDecl)
-    Impl.ArrayDecl = findStdlibType(*this, "Array", 1);
-  return Impl.ArrayDecl;
-}
-
-NominalTypeDecl *ASTContext::getSetDecl() const {
-  if (!Impl.SetDecl)
-    Impl.SetDecl = findStdlibType(*this, "Set", 1);
-  return Impl.SetDecl;
-}
-
-NominalTypeDecl *ASTContext::getSequenceDecl() const {
-  if (!Impl.SequenceDecl)
-    Impl.SequenceDecl = findStdlibType(*this, "Sequence", 1);
-  return Impl.SequenceDecl;
-}
-
-NominalTypeDecl *ASTContext::getDictionaryDecl() const {
-  if (!Impl.DictionaryDecl)
-    Impl.DictionaryDecl = findStdlibType(*this, "Dictionary", 2);
-  return Impl.DictionaryDecl;
+ProtocolDecl *ASTContext::getErrorDecl() const {
+  return getProtocol(KnownProtocolKind::Error);
 }
 
 EnumDecl *ASTContext::getOptionalDecl(OptionalTypeKind kind) const {
@@ -612,14 +543,6 @@ EnumDecl *ASTContext::getOptionalDecl(OptionalTypeKind kind) const {
   case OTK_Optional:
     return getOptionalDecl();
   }
-}
-
-EnumDecl *ASTContext::getOptionalDecl() const {
-  if (!Impl.OptionalDecl)
-    Impl.OptionalDecl
-      = dyn_cast_or_null<EnumDecl>(findStdlibType(*this, "Optional", 1));
-
-  return Impl.OptionalDecl;
 }
 
 static EnumElementDecl *findEnumElement(EnumDecl *e, Identifier name) {
@@ -666,15 +589,6 @@ EnumElementDecl *ASTContext::getOptionalNoneDecl() const {
   return Impl.OptionalNoneDecl;
 }
 
-EnumDecl *ASTContext::getImplicitlyUnwrappedOptionalDecl() const {
-  if (!Impl.ImplicitlyUnwrappedOptionalDecl)
-    Impl.ImplicitlyUnwrappedOptionalDecl
-      = dyn_cast_or_null<EnumDecl>(
-          findStdlibType(*this, "ImplicitlyUnwrappedOptional", 1));
-
-  return Impl.ImplicitlyUnwrappedOptionalDecl;
-}
-
 EnumElementDecl *ASTContext::getImplicitlyUnwrappedOptionalSomeDecl() const {
   if (!Impl.ImplicitlyUnwrappedOptionalSomeDecl)
     Impl.ImplicitlyUnwrappedOptionalSomeDecl =
@@ -689,51 +603,6 @@ EnumElementDecl *ASTContext::getImplicitlyUnwrappedOptionalNoneDecl() const {
   return Impl.ImplicitlyUnwrappedOptionalNoneDecl;
 }
 
-NominalTypeDecl *ASTContext::getOptionSetDecl() const {
-  if (!Impl.OptionSetDecl)
-    Impl.OptionSetDecl = findStdlibType(*this, "OptionSet", 1);
-  return Impl.OptionSetDecl;
-}
-
-NominalTypeDecl *ASTContext::getUnsafeMutablePointerDecl() const {
-  if (!Impl.UnsafeMutablePointerDecl)
-    Impl.UnsafeMutablePointerDecl = findStdlibType(
-      *this, "UnsafeMutablePointer", 1);
-  
-  return Impl.UnsafeMutablePointerDecl;
-}
-
-NominalTypeDecl *ASTContext::getOpaquePointerDecl() const {
-  if (!Impl.OpaquePointerDecl)
-    Impl.OpaquePointerDecl
-    = findStdlibType(*this, "OpaquePointer", 0);
-  
-  return Impl.OpaquePointerDecl;
-}
-
-NominalTypeDecl *ASTContext::getUnsafePointerDecl() const {
-  if (!Impl.UnsafePointerDecl)
-    Impl.UnsafePointerDecl
-      = findStdlibType(*this, "UnsafePointer", 1);
-  
-  return Impl.UnsafePointerDecl;
-}
-
-NominalTypeDecl *ASTContext::getAutoreleasingUnsafeMutablePointerDecl() const {
-  if (!Impl.AutoreleasingUnsafeMutablePointerDecl)
-    Impl.AutoreleasingUnsafeMutablePointerDecl
-      = findStdlibType(*this, "AutoreleasingUnsafeMutablePointer", 1);
-  
-  return Impl.AutoreleasingUnsafeMutablePointerDecl;
-}
-
-NominalTypeDecl *ASTContext::getUnmanagedDecl() const {
-  if (!Impl.UnmanagedDecl)
-    Impl.UnmanagedDecl = findStdlibType(*this, "Unmanaged", 1);
-  
-  return Impl.UnmanagedDecl;
-}
-
 static VarDecl *getPointeeProperty(VarDecl *&cache,
                            NominalTypeDecl *(ASTContext::*getNominal)() const,
                                   const ASTContext &ctx) {
@@ -742,9 +611,9 @@ static VarDecl *getPointeeProperty(VarDecl *&cache,
   // There must be a generic type with one argument.
   NominalTypeDecl *nominal = (ctx.*getNominal)();
   if (!nominal) return nullptr;
-  auto generics = nominal->getGenericParams();
-  if (!generics) return nullptr;
-  if (generics->size() != 1) return nullptr;
+  auto sig = nominal->getGenericSignature();
+  if (!sig) return nullptr;
+  if (sig->getGenericParams().size() != 1) return nullptr;
 
   // There must be a property named "pointee".
   auto identifier = ctx.getIdentifier("pointee");
@@ -754,7 +623,7 @@ static VarDecl *getPointeeProperty(VarDecl *&cache,
   // The property must have type T.
   VarDecl *property = dyn_cast<VarDecl>(results[0]);
   if (!property) return nullptr;
-  if (!property->getType()->isEqual(generics->getPrimaryArchetypes()[0]))
+  if (!property->getInterfaceType()->isEqual(sig->getGenericParams()[0]))
     return nullptr;
 
   cache = property;
@@ -764,6 +633,14 @@ static VarDecl *getPointeeProperty(VarDecl *&cache,
 VarDecl *
 ASTContext::getPointerPointeePropertyDecl(PointerTypeKind ptrKind) const {
   switch (ptrKind) {
+  case PTK_UnsafeMutableRawPointer:
+    return getPointeeProperty(Impl.UnsafeMutableRawPointerMemoryDecl,
+                             &ASTContext::getUnsafeMutableRawPointerDecl,
+                             *this);
+  case PTK_UnsafeRawPointer:
+    return getPointeeProperty(Impl.UnsafeRawPointerMemoryDecl,
+                             &ASTContext::getUnsafeRawPointerDecl,
+                             *this);
   case PTK_UnsafeMutablePointer:
     return getPointeeProperty(Impl.UnsafeMutablePointerMemoryDecl,
                              &ASTContext::getUnsafeMutablePointerDecl,
@@ -778,6 +655,10 @@ ASTContext::getPointerPointeePropertyDecl(PointerTypeKind ptrKind) const {
                              *this);
   }
   llvm_unreachable("bad pointer kind");
+}
+
+CanType ASTContext::getNeverType() const {
+  return getNeverDecl()->getDeclaredType()->getCanonicalType();
 }
 
 TypeAliasDecl *ASTContext::getVoidDecl() const {
@@ -798,30 +679,11 @@ TypeAliasDecl *ASTContext::getVoidDecl() const {
   return Impl.VoidDecl;
 }
 
-
-TypeAliasDecl *ASTContext::getAnyDecl() const {
-  if (Impl.AnyDecl) {
-    return Impl.AnyDecl;
-  }
-
-  // Go find 'Any' in the Swift module.
-  SmallVector<ValueDecl *, 1> results;
-  lookupInSwiftModule("Any", results);
-  for (auto result : results) {
-    if (auto typeAlias = dyn_cast<TypeAliasDecl>(result)) {
-      Impl.AnyDecl = typeAlias;
-      break;
-    }
-  }
-
-  return Impl.AnyDecl;
-}
-
-
-StructDecl *ASTContext::getObjCBoolDecl() {
+StructDecl *ASTContext::getObjCBoolDecl() const {
   if (!Impl.ObjCBoolDecl) {
     SmallVector<ValueDecl *, 1> results;
-    if (Module *M = getModuleByName(Id_ObjectiveC.str())) {
+    auto *Context = const_cast<ASTContext *>(this);
+    if (Module *M = Context->getModuleByName(Id_ObjectiveC.str())) {
       M->lookupValue({ }, getIdentifier("ObjCBool"), NLKind::UnqualifiedLookup,
                      results);
       for (auto result : results) {
@@ -838,6 +700,26 @@ StructDecl *ASTContext::getObjCBoolDecl() {
   return Impl.ObjCBoolDecl;
 }
 
+ClassDecl *ASTContext::getNSErrorDecl() const {
+  if (!Impl.NSErrorDecl) {
+    if (Module *M = getLoadedModule(Id_Foundation)) {
+      // Note: use unqualified lookup so we find NSError regardless of
+      // whether it's defined in the Foundation module or the Clang
+      // Foundation module it imports.
+      UnqualifiedLookup lookup(getIdentifier("NSError"), M, nullptr);
+      if (auto type = lookup.getSingleTypeResult()) {
+        if (auto classDecl = dyn_cast<ClassDecl>(type)) {
+          if (classDecl->getGenericParams() == nullptr) {
+            Impl.NSErrorDecl = classDecl;
+          }
+        }
+      }
+    }
+  }
+
+  return Impl.NSErrorDecl;
+}
+
 ProtocolDecl *ASTContext::getProtocol(KnownProtocolKind kind) const {
   // Check whether we've already looked for and cached this protocol.
   unsigned index = (unsigned)kind;
@@ -848,8 +730,11 @@ ProtocolDecl *ASTContext::getProtocol(KnownProtocolKind kind) const {
   // Find all of the declarations with this name in the appropriate module.
   SmallVector<ValueDecl *, 1> results;
 
-  // _BridgedNSError is in the Foundation module.
-  if (kind == KnownProtocolKind::BridgedNSError) {
+  // _BridgedNSError, _BridgedStoredNSError, and _ErrorCodeProtocol
+  // are in the Foundation module.
+  if (kind == KnownProtocolKind::BridgedNSError ||
+      kind == KnownProtocolKind::BridgedStoredNSError ||
+      kind == KnownProtocolKind::ErrorCodeProtocol) {
     Module *foundation =
         const_cast<ASTContext *>(this)->getLoadedModule(Id_Foundation);
     if (!foundation)
@@ -900,9 +785,18 @@ static CanType stripImmediateLabels(CanType type) {
 }
 
 /// Check whether the given function is non-generic.
-static bool isNonGenericIntrinsic(FuncDecl *fn, CanType &input,
+static bool isNonGenericIntrinsic(FuncDecl *fn, bool allowTypeMembers,
+                                  CanType &input,
                                   CanType &output) {
-  auto fnType = dyn_cast<FunctionType>(fn->getType()->getCanonicalType());
+  CanType type = fn->getInterfaceType()->getCanonicalType();
+  if (allowTypeMembers && fn->getDeclContext()->isTypeContext()) {
+    auto fnType = dyn_cast<FunctionType>(type);
+    if (!fnType) return false;
+
+    type = fnType.getResult();
+  }
+
+  auto fnType = dyn_cast<FunctionType>(type);
   if (!fnType)
     return false;
 
@@ -932,7 +826,8 @@ FuncDecl *ASTContext::getGetBoolDecl(LazyResolver *resolver) const {
   // Look for the function.
   CanType input, output;
   auto decl = findLibraryIntrinsic(*this, "_getBool", resolver);
-  if (!decl || !isNonGenericIntrinsic(decl, input, output))
+  if (!decl ||
+      !isNonGenericIntrinsic(decl, /*allowTypeMembers=*/false, input, output))
     return nullptr;
 
   // Input must be Builtin.Int1
@@ -950,7 +845,7 @@ FuncDecl *ASTContext::getGetBoolDecl(LazyResolver *resolver) const {
   return decl;
 }
 
-FuncDecl *ASTContext::getEqualIntDecl(LazyResolver *resolver) const {
+FuncDecl *ASTContext::getEqualIntDecl() const {
   if (Impl.EqualIntDecl)
     return Impl.EqualIntDecl;
   
@@ -965,12 +860,18 @@ FuncDecl *ASTContext::getEqualIntDecl(LazyResolver *resolver) const {
     FuncDecl *funcDecl = dyn_cast<FuncDecl>(vd);
     if (!funcDecl)
       continue;
-    
-    if (resolver)
+
+    if (funcDecl->getDeclContext()->isTypeContext()) {
+      auto contextTy = funcDecl->getDeclContext()->getDeclaredInterfaceType();
+      if (!contextTy->isEqual(intType)) continue;
+    }
+
+    if (auto resolver = getLazyResolver())
       resolver->resolveDeclSignature(funcDecl);
 
     CanType input, resultType;
-    if (!isNonGenericIntrinsic(funcDecl, input, resultType))
+    if (!isNonGenericIntrinsic(funcDecl, /*allowTypeMembers=*/true, input,
+                               resultType))
       continue;
     
     // Check for the signature: (Int, Int) -> Bool
@@ -996,9 +897,10 @@ ASTContext::getUnimplementedInitializerDecl(LazyResolver *resolver) const {
 
   // Look for the function.
   CanType input, output;
-  auto decl = findLibraryIntrinsic(*this, "_unimplemented_initializer",
+  auto decl = findLibraryIntrinsic(*this, "_unimplementedInitializer",
                                    resolver);
-  if (!decl || !isNonGenericIntrinsic(decl, input, output))
+  if (!decl ||
+      !isNonGenericIntrinsic(decl, /*allowTypeMembers=*/false, input, output))
     return nullptr;
 
   // FIXME: Check inputs and outputs.
@@ -1030,7 +932,8 @@ FuncDecl *ASTContext::getIsOSVersionAtLeastDecl(LazyResolver *resolver) const {
   CanType input, output;
   auto decl =
       findLibraryIntrinsic(*this, "_stdlib_isOSVersionAtLeast", resolver);
-  if (!decl || !isNonGenericIntrinsic(decl, input, output))
+  if (!decl ||
+      !isNonGenericIntrinsic(decl, /*allowTypeMembers=*/false, input, output))
     return nullptr;
 
   // Input must be (Builtin.Word, Builtin.Word, Builtin.Word)
@@ -1051,6 +954,99 @@ FuncDecl *ASTContext::getIsOSVersionAtLeastDecl(LazyResolver *resolver) const {
 
   Impl.IsOSVersionAtLeastDecl = decl;
   return decl;
+}
+
+static bool isHigherPrecedenceThan(PrecedenceGroupDecl *a,
+                                   PrecedenceGroupDecl *b) {
+  assert(a != b && "exact match should already have been filtered");
+
+  SmallVector<PrecedenceGroupDecl*, 4> stack;
+
+  // Compute the transitive set of precedence groups that are
+  // explicitly lower than 'b', including 'b' itself.  This is expected
+  // to be very small, since it's only legal in downstream modules.
+  SmallPtrSet<PrecedenceGroupDecl*, 4> targets;
+  targets.insert(b);
+  stack.push_back(b);
+  do {
+    auto cur = stack.pop_back_val();
+    for (auto &rel : cur->getLowerThan()) {
+      auto group = rel.Group;
+
+      // If we ever see 'a', we're done.
+      if (group == a) return true;
+
+      // Protect against invalid ASTs where the group isn't actually set.
+      if (!group) continue;
+
+      // If we've already inserted this, don't add it to the queue.
+      if (!targets.insert(group).second) continue;
+
+      stack.push_back(group);
+    }
+  } while (!stack.empty());
+
+  // Walk down the higherThan relationships from 'a' and look for
+  // anything in the set we just built.
+  stack.push_back(a);
+  do {
+    auto cur = stack.pop_back_val();
+    assert(!targets.count(cur));
+
+    for (auto &rel : cur->getHigherThan()) {
+      auto group = rel.Group;
+
+      if (!group) continue;
+
+      // If we ever see a group that's in the targets set, we're done.
+      if (targets.count(group)) return true;
+
+      stack.push_back(group);
+    }
+  } while (!stack.empty());
+
+  return false;
+}
+
+static Associativity computeAssociativity(AssociativityCacheType &cache,
+                                          PrecedenceGroupDecl *left,
+                                          PrecedenceGroupDecl *right) {
+  auto it = cache.find({left, right});
+  if (it != cache.end()) return it->second;
+
+  auto result = Associativity::None;
+  if (isHigherPrecedenceThan(left, right))
+    result = Associativity::Left;
+  else if (isHigherPrecedenceThan(right, left))
+    result = Associativity::Right;
+  cache.insert({{left, right}, result});
+  return result;
+}
+
+Associativity
+ASTContext::associateInfixOperators(PrecedenceGroupDecl *left,
+                                    PrecedenceGroupDecl *right) const {
+  // If the operators are in the same precedence group, use the group's
+  // associativity.
+  if (left == right) {
+    return left->getAssociativity();
+  }
+
+  // This relationship is antisymmetric, so we can canonicalize to avoid
+  // computing it twice.  Arbitrarily, if the pointer value of 'left'
+  // is greater than the pointer value of 'right', we flip them and
+  // then flip the result.
+
+  if (uintptr_t(left) < uintptr_t(right)) {
+    return computeAssociativity(Impl.AssociativityCache, left, right);
+  }
+
+  switch (computeAssociativity(Impl.AssociativityCache, right, left)) {
+  case Associativity::Left: return Associativity::Right;
+  case Associativity::Right: return Associativity::Left;
+  case Associativity::None: return Associativity::None;
+  }
+  llvm_unreachable("bad associativity");
 }
 
 // Find library intrinsic function.
@@ -1077,7 +1073,9 @@ bool ASTContext::hasOptionalIntrinsics(LazyResolver *resolver) const {
 }
 
 bool ASTContext::hasPointerArgumentIntrinsics(LazyResolver *resolver) const {
-  return getUnsafeMutablePointerDecl()
+  return getUnsafeMutableRawPointerDecl()
+    && getUnsafeRawPointerDecl()
+    && getUnsafeMutablePointerDecl()
     && getUnsafePointerDecl()
     && (!LangOpts.EnableObjCInterop || getAutoreleasingUnsafeMutablePointerDecl())
     && getConvertPointerToPointerArgument(resolver)
@@ -1116,12 +1114,9 @@ Optional<ArrayRef<Substitution>>
 ASTContext::createTrivialSubstitutions(BoundGenericType *BGT,
                                        DeclContext *gpContext) const {
   assert(gpContext && "No generic parameter context");
-  assert(BGT->isCanonical() && "Requesting non-canonical substitutions");
-  auto Params = gpContext->getGenericParamsOfContext()->getParams();
-  assert(Params.size() == 1);
-  auto Param = Params[0];
-  assert(Param->getArchetype() && "Not type-checked yet");
-  (void) Param;
+  assert(gpContext->isValidGenericContext() &&
+         "Not type-checked yet");
+  assert(BGT->getGenericArgs().size() == 1);
   Substitution Subst(BGT->getGenericArgs()[0], {});
   auto Substitutions = AllocateCopy(llvm::makeArrayRef(Subst));
   auto arena = getArena(BGT->getRecursiveProperties());
@@ -1135,7 +1130,6 @@ ASTContext::getSubstitutions(TypeBase *type,
                              DeclContext *gpContext) const {
   assert(gpContext && "Missing generic parameter context");
   auto arena = getArena(type->getRecursiveProperties());
-  assert(type->isCanonical() && "Requesting non-canonical substitutions");
   auto &boundGenericSubstitutions
     = Impl.getArena(arena).BoundGenericSubstitutions;
   auto known = boundGenericSubstitutions.find({type, gpContext});
@@ -1157,16 +1151,9 @@ void ASTContext::setSubstitutions(TypeBase* type,
   auto arena = getArena(type->getRecursiveProperties());
   auto &boundGenericSubstitutions
     = Impl.getArena(arena).BoundGenericSubstitutions;
-  assert(type->isCanonical() && "Requesting non-canonical substitutions");
   assert(boundGenericSubstitutions.count({type, gpContext}) == 0 &&
          "Already have substitutions?");
   boundGenericSubstitutions[{type, gpContext}] = Subs;
-}
-
-Type ASTContext::getTypeVariableMemberType(TypeVariableType *baseTypeVar,
-                                           AssociatedTypeDecl *assocType) {
-  auto &arena = *Impl.CurrentConstraintSolverArena;
-  return arena.GetTypeMember(baseTypeVar, assocType);
 }
 
 void ASTContext::addSearchPath(StringRef searchPath, bool isFramework) {
@@ -1221,13 +1208,7 @@ void ASTContext::verifyAllLoadedModules() const {
 
   for (auto &topLevelModulePair : LoadedModules) {
     Module *M = topLevelModulePair.second;
-    bool hasAnyFileUnits = std::any_of(M->getFiles().begin(),
-                                       M->getFiles().end(),
-                                       [](const FileUnit *file) {
-      return !isa<DerivedFileUnit>(file);
-    });
-    if (!hasAnyFileUnits)
-      assert(M->failedToLoad());
+    assert(!M->getFiles().empty() || M->failedToLoad());
   }
 #endif
 }
@@ -1273,33 +1254,25 @@ void ASTContext::getVisibleTopLevelClangModules(
     collectAllModules(Modules);
 }
 
-ArchetypeBuilder *ASTContext::getOrCreateArchetypeBuilder(
-                    CanGenericSignature sig,
-                    ModuleDecl *mod) {
+std::pair<ArchetypeBuilder *, GenericEnvironment *>
+ASTContext::getOrCreateArchetypeBuilder(CanGenericSignature sig,
+                                        ModuleDecl *mod) {
   // Check whether we already have an archetype builder for this
   // signature and module.
   auto known = Impl.ArchetypeBuilders.find({sig, mod});
   if (known != Impl.ArchetypeBuilders.end())
-    return known->second.get();
+    return { known->second.first.get(), known->second.second };
 
   // Create a new archetype builder with the given signature.
-  auto builder = new ArchetypeBuilder(*mod, Diags);
-  builder->addGenericSignature(sig, /*adoptArchetypes=*/false,
-                               /*treatRequirementsAsExplicit=*/true);
+  auto builder = new ArchetypeBuilder(*mod);
+  builder->addGenericSignature(sig, nullptr);
   
-  // Store this archetype builder.
+  // Store this archetype builder and its generic environment.
+  auto genericEnv = builder->getGenericEnvironment(sig);
   Impl.ArchetypeBuilders[{sig, mod}]
-    = std::unique_ptr<ArchetypeBuilder>(builder);
-  return builder;
-}
+    = { std::unique_ptr<ArchetypeBuilder>(builder), genericEnv };
 
-void ASTContext::setArchetypeBuilder(CanGenericSignature sig,
-                                     ModuleDecl *mod,
-                                     std::unique_ptr<ArchetypeBuilder> builder) {
-  if (Impl.ArchetypeBuilders.find({sig, mod})
-        == Impl.ArchetypeBuilders.end()) {
-    Impl.ArchetypeBuilders[{sig, mod}] = move(builder);
-  }
+  return { builder, genericEnv };
 }
 
 Module *
@@ -1390,38 +1363,6 @@ void ValueDecl::setLocalDiscriminator(unsigned index) {
   getASTContext().Impl.LocalDiscriminators.insert({this, index});
 }
 
-PatternBindingInitializer *
-ASTContext::createPatternBindingContext(DeclContext *parent) {
-  // Check for an existing context we can re-use.
-  if (auto existing = Impl.UnusedPatternBindingContext) {
-    Impl.UnusedPatternBindingContext = nullptr;
-    existing->reset(parent);
-    return existing;
-  }
-
-  return new (*this) PatternBindingInitializer(parent);
-}
-void ASTContext::destroyPatternBindingContext(PatternBindingInitializer *DC) {
-  // There isn't much value in caching more than one of these.
-  Impl.UnusedPatternBindingContext = DC;
-}
-
-DefaultArgumentInitializer *
-ASTContext::createDefaultArgumentContext(DeclContext *fn, unsigned index) {
-  // Check for an existing context we can re-use.
-  if (auto existing = Impl.UnusedDefaultArgumentContext) {
-    Impl.UnusedDefaultArgumentContext = nullptr;
-    existing->reset(fn, index);
-    return existing;
-  }
-
-  return new (*this) DefaultArgumentInitializer(fn, index);
-}
-void ASTContext::destroyDefaultArgumentContext(DefaultArgumentInitializer *DC) {
-  // There isn't much value in caching more than one of these.
-  Impl.UnusedDefaultArgumentContext = DC;
-}
-
 NormalProtocolConformance *
 ASTContext::getBehaviorConformance(Type conformingType,
                                    Type conformingInterfaceType,
@@ -1432,6 +1373,15 @@ ASTContext::getBehaviorConformance(Type conformingType,
   auto conformance = new (*this, AllocationArena::Permanent)
     NormalProtocolConformance(conformingType, conformingInterfaceType,
                               protocol, loc, storage, state);
+
+  if (auto nominal = conformingInterfaceType->getAnyNominal()) {
+    // Note: this is an egregious hack. The conformances need to be associated
+    // with the actual storage declarations.
+    SmallVector<ProtocolConformance *, 2> conformances;
+    if (!nominal->lookupConformance(nominal->getModuleContext(), protocol,
+                                    conformances))
+      nominal->registerProtocolConformance(conformance);
+  }
   return conformance;
 }
 
@@ -2129,7 +2079,7 @@ static void removeValidObjCConflictingMethods(
   methods = methods.slice(0, newEnd - methods.begin());
 }
 
-/// Determine whether the should associate a conflict among the given
+/// Determine whether we should associate a conflict among the given
 /// set of methods with the specified source file.
 static bool shouldAssociateConflictWithSourceFile(
               SourceFile &sf, 
@@ -2406,29 +2356,6 @@ Optional<KnownFoundationEntity> swift::getKnownFoundationEntity(StringRef name){
     .Default(None);
 }
 
-bool swift::nameConflictsWithStandardLibrary(KnownFoundationEntity entity) {
-  switch (entity) {
-  case KnownFoundationEntity::NSArray:
-  case KnownFoundationEntity::NSDictionary:
-  case KnownFoundationEntity::NSInteger:
-  case KnownFoundationEntity::NSRange:
-  case KnownFoundationEntity::NSSet:
-  case KnownFoundationEntity::NSString:
-  case KnownFoundationEntity::NSCopying:
-  case KnownFoundationEntity::NSError:
-  case KnownFoundationEntity::NSErrorPointer:
-  case KnownFoundationEntity::NSNumber:
-  case KnownFoundationEntity::NSObject:
-  case KnownFoundationEntity::NSUInteger:
-  case KnownFoundationEntity::NSURL:
-  case KnownFoundationEntity::NSZone:
-    return true;
-
-  case KnownFoundationEntity::NSStringEncoding:
-    return false;
-  }
-}
-
 StringRef ASTContext::getSwiftName(KnownFoundationEntity kind) {
   StringRef objcName;
   switch (kind) {
@@ -2437,13 +2364,6 @@ StringRef ASTContext::getSwiftName(KnownFoundationEntity kind) {
     break;
 #include "swift/AST/KnownFoundationEntities.def"
   }
-
-  // If we're omitting needless words and the name won't conflict with
-  // something in the standard library, strip the prefix off the Swift
-  // name.
-  if (LangOpts.StripNSPrefix &&
-      !nameConflictsWithStandardLibrary(kind))
-    return objcName.substr(2);
 
   return objcName;
 }
@@ -2456,6 +2376,13 @@ void ASTContext::dumpArchetypeContext(ArchetypeType *archetype,
 void ASTContext::dumpArchetypeContext(ArchetypeType *archetype,
                                       llvm::raw_ostream &os,
                                       unsigned indent) const {
+  if (archetype->isOpenedExistential())
+    return;
+
+  archetype = archetype->getPrimary();
+  if (!archetype)
+    return;
+
   auto knownDC = ArchetypeContexts.find(archetype);
   if (knownDC != ArchetypeContexts.end())
     knownDC->second->printContext(os, indent);
@@ -2467,6 +2394,21 @@ void ASTContext::dumpArchetypeContext(ArchetypeType *archetype,
 
 // Simple accessors.
 Type ErrorType::get(const ASTContext &C) { return C.TheErrorType; }
+
+Type ErrorType::get(Type originalType) {
+  assert(originalType);
+
+  auto properties = originalType->getRecursiveProperties();
+  auto arena = getArena(properties);
+
+  auto &ctx = originalType->getASTContext();
+  auto &entry = ctx.Impl.getArena(arena).ErrorTypesWithOriginal[originalType];
+  if (entry) return entry;
+
+  void *mem = ctx.Allocate(sizeof(ErrorType) + sizeof(Type),
+                           alignof(ErrorType), arena);
+  return entry = new (mem) ErrorType(ctx, originalType);
+}
 
 BuiltinIntegerType *BuiltinIntegerType::get(BuiltinIntegerWidth BitWidth,
                                             const ASTContext &C) {
@@ -2495,13 +2437,14 @@ BuiltinVectorType *BuiltinVectorType::get(const ASTContext &context,
   return vecTy;
 }
 
-
-ParenType *ParenType::get(const ASTContext &C, Type underlying) {
+ParenType *ParenType::get(const ASTContext &C, Type underlying,
+                          ParameterTypeFlags flags) {
   auto properties = underlying->getRecursiveProperties();
   auto arena = getArena(properties);
-  ParenType *&Result = C.Impl.getArena(arena).ParenTypes[underlying];
+  ParenType *&Result =
+      C.Impl.getArena(arena).ParenTypes[{underlying, flags.toRaw()}];
   if (Result == 0) {
-    Result = new (C, arena) ParenType(underlying, properties);
+    Result = new (C, arena) ParenType(underlying, properties, flags);
   }
   return Result;
 }
@@ -2514,24 +2457,22 @@ void TupleType::Profile(llvm::FoldingSetNodeID &ID,
                         ArrayRef<TupleTypeElt> Fields) {
   ID.AddInteger(Fields.size());
   for (const TupleTypeElt &Elt : Fields) {
-    ID.AddPointer(Elt.NameAndVariadic.getOpaqueValue());
+    ID.AddPointer(Elt.Name.get());
     ID.AddPointer(Elt.getType().getPointer());
-    ID.AddInteger(static_cast<unsigned>(Elt.getDefaultArgKind()));
+    ID.AddInteger(Elt.Flags.toRaw());
   }
 }
 
 /// getTupleType - Return the uniqued tuple type with the specified elements.
 Type TupleType::get(ArrayRef<TupleTypeElt> Fields, const ASTContext &C) {
-  if (Fields.size() == 1 && !Fields[0].isVararg() && !Fields[0].hasName()
-      && Fields[0].getDefaultArgKind() == DefaultArgumentKind::None)
-    return ParenType::get(C, Fields[0].getType());
+  if (Fields.size() == 1 && !Fields[0].isVararg() && !Fields[0].hasName())
+    return ParenType::get(C, Fields[0].getType(),
+                          Fields[0].getParameterFlags());
 
   RecursiveTypeProperties properties;
   for (const TupleTypeElt &Elt : Fields) {
     if (Elt.getType())
       properties |= Elt.getType()->getRecursiveProperties();
-    if (Elt.getDefaultArgKind() != DefaultArgumentKind::None)
-      properties |= RecursiveTypeProperties::HasDefaultParameter;
   }
 
   auto arena = getArena(properties);
@@ -2619,11 +2560,15 @@ BoundGenericType::BoundGenericType(TypeKind theKind,
 BoundGenericType *BoundGenericType::get(NominalTypeDecl *TheDecl,
                                         Type Parent,
                                         ArrayRef<Type> GenericArgs) {
+  assert(TheDecl->getGenericParams() && "must be a generic type decl");
+  assert((!Parent || Parent->is<NominalType>() ||
+          Parent->is<BoundGenericType>() ||
+          Parent->is<UnboundGenericType>()) &&
+         "parent must be a nominal type");
+
   ASTContext &C = TheDecl->getDeclContext()->getASTContext();
   llvm::FoldingSetNodeID ID;
   RecursiveTypeProperties properties;
-  if (Parent)
-    properties |= Parent->getRecursiveProperties();
   BoundGenericType::Profile(ID, TheDecl, Parent, GenericArgs, properties);
 
   auto arena = getArena(properties);
@@ -2657,8 +2602,8 @@ BoundGenericType *BoundGenericType::get(NominalTypeDecl *TheDecl,
   } else {
     auto theEnum = cast<EnumDecl>(TheDecl);
     newType = new (C, arena) BoundGenericEnumType(theEnum, Parent, ArgsCopy,
-                                                   IsCanonical ? &C : 0,
-                                                   properties);
+                                                  IsCanonical ? &C : 0,
+                                                  properties);
   }
   C.Impl.getArena(arena).BoundGenericTypes.InsertNode(newType, InsertPos);
 
@@ -2666,6 +2611,13 @@ BoundGenericType *BoundGenericType::get(NominalTypeDecl *TheDecl,
 }
 
 NominalType *NominalType::get(NominalTypeDecl *D, Type Parent, const ASTContext &C) {
+  assert((isa<ProtocolDecl>(D) || !D->getGenericParams()) &&
+         "must be a non-generic type decl");
+  assert((!Parent || Parent->is<NominalType>() ||
+          Parent->is<BoundGenericType>() ||
+          Parent->is<UnboundGenericType>()) &&
+         "parent must be a nominal type");
+
   switch (D->getKind()) {
   case DeclKind::Enum:
     return EnumType::get(cast<EnumDecl>(D), Parent, C);
@@ -2808,6 +2760,8 @@ ReferenceStorageType *ReferenceStorageType::get(Type T, Ownership ownership,
       new (C, arena) UnownedStorageType(T, T->isCanonical() ? &C : 0,
                                         properties);
   case Ownership::Weak:
+    assert(T->getAnyOptionalObjectType() &&
+           "object of weak storage type is not optional");
     return entry =
       new (C, arena) WeakStorageType(T, T->isCanonical() ? &C : 0,
                                      properties);
@@ -2951,14 +2905,11 @@ getGenericFunctionRecursiveProperties(Type Input, Type Result) {
 AnyFunctionType *AnyFunctionType::withExtInfo(ExtInfo info) const {
   if (isa<FunctionType>(this))
     return FunctionType::get(getInput(), getResult(), info);
-  if (auto *polyFnTy = dyn_cast<PolymorphicFunctionType>(this))
-    return PolymorphicFunctionType::get(getInput(), getResult(),
-                                        &polyFnTy->getGenericParams(), info);
   if (auto *genFnTy = dyn_cast<GenericFunctionType>(this))
     return GenericFunctionType::get(genFnTy->getGenericSignature(),
                                     getInput(), getResult(), info);
 
-  static_assert(3 - 1 ==
+  static_assert(2 - 1 ==
                   static_cast<int>(TypeKind::Last_AnyFunctionType) -
                     static_cast<int>(TypeKind::First_AnyFunctionType),
                 "unhandled function type");
@@ -2995,34 +2946,6 @@ FunctionType::FunctionType(Type input, Type output,
 { }
 
 
-/// FunctionType::get - Return a uniqued function type with the specified
-/// input and result.
-PolymorphicFunctionType *PolymorphicFunctionType::get(Type input, Type output,
-                                                      GenericParamList *params,
-                                                      const ExtInfo &Info) {
-  auto properties = getFunctionRecursiveProperties(input, output);
-  auto arena = getArena(properties);
-
-  const ASTContext &C = input->getASTContext();
-
-  return new (C, arena) PolymorphicFunctionType(input, output, params,
-                                                Info, C, properties);
-}
-
-PolymorphicFunctionType::PolymorphicFunctionType(Type input, Type output,
-                                                 GenericParamList *params,
-                                                 const ExtInfo &Info,
-                                                 const ASTContext &C,
-                                        RecursiveTypeProperties properties)
-  : AnyFunctionType(TypeKind::PolymorphicFunction,
-                    (input->isCanonical() && output->isCanonical()) ?&C : 0,
-                    input, output, properties,
-                    Info),
-    Params(params)
-{
-  assert(!input->hasTypeVariable() && !output->hasTypeVariable());
-}
-
 void GenericFunctionType::Profile(llvm::FoldingSetNodeID &ID,
                                   GenericSignature *sig,
                                   Type input,
@@ -3050,14 +2973,23 @@ GenericFunctionType::get(GenericSignature *sig,
   // Do we already have this generic function type?
   void *insertPos;
   if (auto result
-        = ctx.Impl.GenericFunctionTypes.FindNodeOrInsertPos(id, insertPos))
+        = ctx.Impl.GenericFunctionTypes.FindNodeOrInsertPos(id, insertPos)) {
     return result;
+  }
 
   // We have to construct this generic function type. Determine whether
-  // it's canonical.
+  // it's canonical.  Unfortunately, isCanonicalTypeInContext can cause
+  // new GenericFunctionTypes to be created and thus invalidate our insertion
+  // point.
+  auto &moduleForCanonicality = *ctx.TheBuiltinModule;
   bool isCanonical = sig->isCanonical()
-    && input->isCanonical()
-    && output->isCanonical();
+    && sig->isCanonicalTypeInContext(input, moduleForCanonicality)
+    && sig->isCanonicalTypeInContext(output, moduleForCanonicality);
+
+  if (auto result
+        = ctx.Impl.GenericFunctionTypes.FindNodeOrInsertPos(id, insertPos)) {
+    return result;
+  }
 
   // Allocate storage for the object.
   void *mem = ctx.Allocate(sizeof(GenericFunctionType),
@@ -3067,6 +2999,7 @@ GenericFunctionType::get(GenericSignature *sig,
   auto result = new (mem) GenericFunctionType(sig, input, output, info,
                                               isCanonical ? &ctx : nullptr,
                                               properties);
+
   ctx.Impl.GenericFunctionTypes.InsertNode(result, insertPos);
   return result;
 }
@@ -3215,20 +3148,6 @@ CanSILBlockStorageType SILBlockStorageType::get(CanType captureType) {
   SILBlockStorageType *storageTy = new (mem) SILBlockStorageType(captureType);
   ctx.Impl.SILBlockStorageTypes.insert({captureType, storageTy});
   return CanSILBlockStorageType(storageTy);
-}
-
-CanSILBoxType SILBoxType::get(CanType boxType) {
-  ASTContext &ctx = boxType->getASTContext();
-  auto found = ctx.Impl.SILBoxTypes.find(boxType);
-  if (found != ctx.Impl.SILBoxTypes.end())
-    return CanSILBoxType(found->second);
-  
-  void *mem = ctx.Allocate(sizeof(SILBlockStorageType),
-                           alignof(SILBlockStorageType));
-  
-  auto storageTy = new (mem) SILBoxType(boxType);
-  ctx.Impl.SILBoxTypes.insert({boxType, storageTy});
-  return CanSILBoxType(storageTy);
 }
 
 CanSILFunctionType SILFunctionType::get(GenericSignature *genericSig,
@@ -3393,7 +3312,7 @@ void ProtocolType::Profile(llvm::FoldingSetNodeID &ID, ProtocolDecl *D,
 }
 
 LValueType *LValueType::get(Type objectTy) {
-  assert(!objectTy->is<ErrorType>() &&
+  assert(!objectTy->hasError() &&
          "cannot have ErrorType wrapped inside LValueType");
   assert(!objectTy->is<LValueType>() && !objectTy->is<InOutType>() &&
          "cannot have 'inout' or @lvalue wrapped inside an @lvalue");
@@ -3413,8 +3332,6 @@ LValueType *LValueType::get(Type objectTy) {
 }
 
 InOutType *InOutType::get(Type objectTy) {
-  assert(!objectTy->is<ErrorType>() &&
-         "cannot have ErrorType wrapped inside InOutType");
   assert(!objectTy->is<LValueType>() && !objectTy->is<InOutType>() &&
          "cannot have 'inout' or @lvalue wrapped inside an 'inout'");
 
@@ -3449,13 +3366,17 @@ SubstitutedType *SubstitutedType::get(Type Original, Type Replacement,
   return Known;
 }
 
-DependentMemberType *DependentMemberType::get(Type base, Identifier name,
-                                              const ASTContext &ctx) {
+DependentMemberType *DependentMemberType::get(Type base, Identifier name) {
   auto properties = base->getRecursiveProperties();
-  properties |= RecursiveTypeProperties::HasTypeParameter;
+  // FIXME: The specific introduction of HasTypeParameter here is due to
+  // type witness inference. See the use of mapErrorTypeToOriginal in
+  // TypeCheckProtocol.cpp.
+  if (!properties.hasTypeVariable())
+    properties |= RecursiveTypeProperties::HasTypeParameter;
   auto arena = getArena(properties);
 
   llvm::PointerUnion<Identifier, AssociatedTypeDecl *> stored(name);
+  const ASTContext &ctx = base->getASTContext();
   auto *&known = ctx.Impl.getArena(arena).DependentMemberTypes[
                                             {base, stored.getOpaqueValue()}];
   if (!known) {
@@ -3467,13 +3388,17 @@ DependentMemberType *DependentMemberType::get(Type base, Identifier name,
 }
 
 DependentMemberType *DependentMemberType::get(Type base,
-                                              AssociatedTypeDecl *assocType,
-                                              const ASTContext &ctx) {
+                                              AssociatedTypeDecl *assocType) {
   auto properties = base->getRecursiveProperties();
-  properties |= RecursiveTypeProperties::HasTypeParameter;
+  // FIXME: The specific introduction of HasTypeParameter here is due to
+  // type witness inference. See the use of mapErrorTypeToOriginal in
+  // TypeCheckProtocol.cpp.
+  if (!properties.hasTypeVariable())
+    properties |= RecursiveTypeProperties::HasTypeParameter;
   auto arena = getArena(properties);
 
   llvm::PointerUnion<Identifier, AssociatedTypeDecl *> stored(assocType);
+  const ASTContext &ctx = base->getASTContext();
   auto *&known = ctx.Impl.getArena(arena).DependentMemberTypes[
                                             {base, stored.getOpaqueValue()}];
   if (!known) {
@@ -3531,15 +3456,6 @@ CanType ArchetypeType::getAnyOpened(Type existential) {
   return ArchetypeType::getOpened(existential);
 }
 
-void *ExprHandle::operator new(size_t Bytes, ASTContext &C,
-                            unsigned Alignment) {
-  return C.Allocate(Bytes, Alignment);
-}
-
-ExprHandle *ExprHandle::get(ASTContext &Context, Expr *E) {
-  return new (Context) ExprHandle(E);
-}
-
 void TypeLoc::setInvalidType(ASTContext &C) {
   TAndValidBit.setPointerAndInt(ErrorType::get(C), true);
 }
@@ -3595,8 +3511,7 @@ void GenericSignature::Profile(llvm::FoldingSetNodeID &ID,
 
   for (auto &reqt : requirements) {
     ID.AddPointer(reqt.getFirstType().getPointer());
-    if (reqt.getKind() != RequirementKind::WitnessMarker)
-      ID.AddPointer(reqt.getSecondType().getPointer());
+    ID.AddPointer(reqt.getSecondType().getPointer());
     ID.AddInteger(unsigned(reqt.getKind()));
   }
 }
@@ -3604,8 +3519,12 @@ void GenericSignature::Profile(llvm::FoldingSetNodeID &ID,
 GenericSignature *GenericSignature::get(ArrayRef<GenericTypeParamType *> params,
                                         ArrayRef<Requirement> requirements,
                                         bool isKnownCanonical) {
-  if (params.empty() && requirements.empty())
-    return nullptr;
+  assert(!params.empty());
+
+#ifndef NDEBUG
+  for (auto req : requirements)
+    assert(req.getFirstType()->isTypeParameter());
+#endif
 
   // Check for an existing generic signature.
   llvm::FoldingSetNodeID ID;
@@ -3629,6 +3548,25 @@ GenericSignature *GenericSignature::get(ArrayRef<GenericTypeParamType *> params,
                                            isKnownCanonical);
   ctx.Impl.GenericSignatures.InsertNode(newSig, insertPos);
   return newSig;
+}
+
+GenericEnvironment *
+GenericEnvironment::get(ASTContext &ctx,
+                        GenericSignature *signature,
+                        TypeSubstitutionMap interfaceToArchetypeMap) {
+  assert(!interfaceToArchetypeMap.empty());
+  assert(interfaceToArchetypeMap.size() == signature->getGenericParams().size()
+         && "incorrect number of parameters");
+
+
+  return new (ctx) GenericEnvironment(signature, interfaceToArchetypeMap);
+}
+
+GenericEnvironment *GenericEnvironment::getIncomplete(
+                                                  ASTContext &ctx,
+                                                  GenericSignature *signature) {
+  TypeSubstitutionMap empty;
+  return new (ctx) GenericEnvironment(signature, empty);
 }
 
 void DeclName::CompoundDeclName::Profile(llvm::FoldingSetNodeID &id,
@@ -3773,20 +3711,28 @@ ASTContext::getForeignRepresentationInfo(NominalTypeDecl *nominal,
        known->second.getGeneration() < CurrentGeneration)) {
     Optional<ForeignRepresentationInfo> result;
 
-    // Look for a conformance to _ObjectiveCBridgeable.
+    // Look for a conformance to _ObjectiveCBridgeable (other than Optional's--
+    // we don't want to allow exposing APIs with double-optional types like
+    // NSObject??, even though Optional is bridged to its underlying type).
     //
     // FIXME: We're implicitly depending on the fact that lookupConformance
     // is global, ignoring the module we provide for it.
-    if (auto objcBridgeable
-          = getProtocol(KnownProtocolKind::ObjectiveCBridgeable)) {
-      if (auto conformance
-            = dc->getParentModule()->lookupConformance(
-                nominal->getDeclaredType(), objcBridgeable,
-                getLazyResolver())) {
-        result =
-            ForeignRepresentationInfo::forBridged(conformance->getConcrete());
+    if (nominal != dc->getASTContext().getOptionalDecl()) {
+      if (auto objcBridgeable
+            = getProtocol(KnownProtocolKind::ObjectiveCBridgeable)) {
+        if (auto conformance
+              = dc->getParentModule()->lookupConformance(
+                  nominal->getDeclaredType(), objcBridgeable,
+                  getLazyResolver())) {
+          result =
+              ForeignRepresentationInfo::forBridged(conformance->getConcrete());
+        }
       }
     }
+
+    // Error is bridged to NSError, when it's available.
+    if (nominal == getErrorDecl() && getNSErrorDecl())
+      result = ForeignRepresentationInfo::forBridgedError();
 
     // If we didn't find anything, mark the result as "None".
     if (!result)
@@ -3817,6 +3763,10 @@ ASTContext::getForeignRepresentationInfo(NominalTypeDecl *nominal,
           KnownProtocolKind::ObjectiveCBridgeable))
       return ForeignRepresentationInfo::forNone();
 
+    // Ignore error bridging in C.
+    if (entry.getKind() == ForeignRepresentableKind::BridgedError)
+      return ForeignRepresentationInfo::forNone();
+
     SWIFT_FALLTHROUGH;
 
   case ForeignLanguage::ObjectiveC:
@@ -3824,48 +3774,47 @@ ASTContext::getForeignRepresentationInfo(NominalTypeDecl *nominal,
   }
 }
 
-bool ASTContext::isStandardLibraryTypeBridgedInFoundation(
+bool ASTContext::isTypeBridgedInExternalModule(
      NominalTypeDecl *nominal) const {
   return (nominal == getBoolDecl() ||
           nominal == getIntDecl() ||
+          nominal == getInt64Decl() ||
+          nominal == getInt32Decl() ||
+          nominal == getInt16Decl() ||
+          nominal == getInt8Decl() ||
           nominal == getUIntDecl() ||
+          nominal == getUInt64Decl() ||
+          nominal == getUInt32Decl() ||
+          nominal == getUInt16Decl() ||
+          nominal == getUInt8Decl() ||
           nominal == getFloatDecl() ||
           nominal == getDoubleDecl() ||
           nominal == getArrayDecl() ||
           nominal == getDictionaryDecl() ||
           nominal == getSetDecl() ||
           nominal == getStringDecl() ||
-          // Weird one-off case where CGFloat is bridged to NSNumber.
-          nominal->getName() == Id_CGFloat);
+          nominal == getErrorDecl() ||
+          nominal == getAnyHashableDecl() ||
+          // Foundation's overlay depends on the CoreGraphics overlay, but
+          // CoreGraphics value types bridge to Foundation objects such as
+          // NSValue and NSNumber, so to avoid circular dependencies, the
+          // bridging implementations of CG types appear in the Foundation
+          // module.
+          nominal->getParentModule()->getName() == Id_CoreGraphics ||
+          // CoreMedia is a dependency of AVFoundation, but the bridged
+          // NSValue implementations for CMTime, CMTimeRange, and
+          // CMTimeMapping are provided by AVFoundation, and AVFoundation
+          // gets upset if you don't use the NSValue subclasses its factory
+          // methods instantiate.
+          nominal->getParentModule()->getName() == Id_CoreMedia);
 }
 
-Optional<Type>
-ASTContext::getBridgedToObjC(const DeclContext *dc, Type type,
-                             LazyResolver *resolver) const {
-  if (type->isBridgeableObjectType())
+Type ASTContext::getBridgedToObjC(const DeclContext *dc, Type type,
+                                  Type *bridgedValueType) const {
+  if (type->isBridgeableObjectType()) {
+    if (bridgedValueType) *bridgedValueType = type;
+
     return type;
-
-  // Whitelist certain types even if Foundation is not imported, to ensure
-  // that casts from AnyObject to one of these types are not optimized away.
-  //
-  // Outside of these standard library types to which Foundation
-  // bridges, an _ObjectiveCBridgeable conformance can only be added
-  // in the same module where the Swift type itself is defined, so the
-  // optimizer will be guaranteed to see the conformance if it exists.
-  bool knownBridgedToObjC = false;
-  if (auto ntd = type->getAnyNominal())
-    knownBridgedToObjC = isStandardLibraryTypeBridgedInFoundation(ntd);
-
-  // If the type is generic, check whether its generic arguments are also
-  // bridged to Objective-C.
-  if (auto bgt = type->getAs<BoundGenericType>()) {
-    for (auto arg : bgt->getGenericArgs()) {
-      if (arg->hasTypeVariable())
-        continue;
-
-      if (!getBridgedToObjC(dc, arg, resolver))
-        return None;
-    }
   }
 
   if (auto metaTy = type->getAs<MetatypeType>())
@@ -3876,27 +3825,65 @@ ASTContext::getBridgedToObjC(const DeclContext *dc, Type type,
     if (existentialMetaTy->getInstanceType()->isObjCExistentialType())
       return type;
 
-  // Retrieve the _BridgedToObjectiveC protocol.
-  auto bridgedProto = getProtocol(KnownProtocolKind::ObjectiveCBridgeable);
-  if (!bridgedProto)
-    return None;
+  // Check whether the type is an existential that contains
+  // Error. If so, it's bridged to NSError.
+  if (type->isExistentialWithError()) {
+    if (auto nsErrorDecl = getNSErrorDecl()) {
+      // The corresponding value type is Error.
+      if (bridgedValueType)
+        *bridgedValueType = getErrorDecl()->getDeclaredInterfaceType();
 
-  // Check whether the type conforms to _BridgedToObjectiveC.
-  auto conformance
-    = dc->getParentModule()->lookupConformance(type, bridgedProto, resolver);
-  if (!conformance) {
-    // If we haven't imported Foundation but this is a whitelisted type,
-    // behave as above.
-    if (knownBridgedToObjC)
-      return Type();
-    return None;
+      return nsErrorDecl->getDeclaredInterfaceType();
+    }
   }
 
-  // Find the type we bridge to.
-  return ProtocolConformance::getTypeWitnessByName(type,
-                                                   conformance->getConcrete(),
-                                                   Id_ObjectiveCType,
-                                                   resolver);
+  // Try to find a conformance that will enable bridging.
+  auto findConformance =
+    [&](KnownProtocolKind known) -> Optional<ProtocolConformanceRef> {
+      // Don't ascribe any behavior to Optional other than what we explicitly
+      // give it. We don't want things like AnyObject?? to work.
+      if (type->getAnyNominal() == getOptionalDecl())
+        return None;
+      
+      // Find the protocol.
+      auto proto = getProtocol(known);
+      if (!proto) return None;
+
+      return dc->getParentModule()->lookupConformance(type, proto,
+                                                      getLazyResolver());
+    };
+
+  // Do we conform to _ObjectiveCBridgeable?
+  if (auto conformance
+        = findConformance(KnownProtocolKind::ObjectiveCBridgeable)) {
+    // The corresponding value type is... the type.
+    if (bridgedValueType)
+      *bridgedValueType = type;
+
+    // Find the Objective-C class type we bridge to.
+    if (conformance->isConcrete()) {
+      return ProtocolConformance::getTypeWitnessByName(
+               type, *conformance, Id_ObjectiveCType,
+               getLazyResolver());
+    } else {
+      return type->castTo<ArchetypeType>()->getNestedType(Id_ObjectiveCType)
+        .getValue();
+    }
+  }
+
+  // Do we conform to Error?
+  if (findConformance(KnownProtocolKind::Error)) {
+    // The corresponding value type is Error.
+    if (bridgedValueType)
+      *bridgedValueType = getErrorDecl()->getDeclaredInterfaceType();
+
+    // Bridge to NSError.
+    if (auto nsErrorDecl = getNSErrorDecl())
+      return nsErrorDecl->getDeclaredInterfaceType();
+  }
+
+  // No special bridging to Objective-C, but this can become an 'Any'.
+  return Type();
 }
 
 std::pair<ArchetypeBuilder *, ArchetypeBuilder::PotentialArchetype *>
@@ -4041,4 +4028,23 @@ const InheritedNameSet *ASTContext::getAllPropertyNames(
   }
 
   return known->second.get();
+}
+
+CanGenericSignature ASTContext::getSingleGenericParameterSignature() const {
+  if (auto theSig = Impl.SingleGenericParameterSignature)
+    return theSig;
+  
+  auto param = GenericTypeParamType::get(0, 0, *this);
+  auto sig = GenericSignature::get(param, { });
+  auto canonicalSig = CanGenericSignature(sig);
+  Impl.SingleGenericParameterSignature = canonicalSig;
+  return canonicalSig;
+}
+
+llvm::FoldingSet<SILLayout> *&ASTContext::getSILLayouts() {
+  return Impl.SILLayouts;
+}
+
+llvm::DenseMap<CanType, SILBoxType *> &ASTContext::getSILBoxTypes() {
+  return Impl.SILBoxTypes;
 }

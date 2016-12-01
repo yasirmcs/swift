@@ -1,4 +1,4 @@
-// RUN: %target-swift-frontend -emit-silgen %s | FileCheck %s
+// RUN: %target-swift-frontend -emit-silgen %s | %FileCheck %s
 
 func markUsed<T>(_ t: T) {}
 
@@ -12,12 +12,12 @@ func testSwitchOnExistential(_ value: Any) {
 }
 
 // CHECK-LABEL: sil hidden @_TF10switch_isa23testSwitchOnExistentialFP_T_ :
-// CHECK:   [[ANY:%.*]] = alloc_stack $protocol<>
+// CHECK:   [[ANY:%.*]] = alloc_stack $Any
 // CHECK:   copy_addr %0 to [initialization] [[ANY]]
 // CHECK:   [[BOOL:%.*]] = alloc_stack $Bool
-// CHECK:   checked_cast_addr_br copy_on_success protocol<> in [[ANY]] : $*protocol<> to Bool in [[BOOL]] : $*Bool, [[IS_BOOL:bb[0-9]+]], [[IS_NOT_BOOL:bb[0-9]+]]
+// CHECK:   checked_cast_addr_br copy_on_success Any in [[ANY]] : $*Any to Bool in [[BOOL]] : $*Bool, [[IS_BOOL:bb[0-9]+]], [[IS_NOT_BOOL:bb[0-9]+]]
 // CHECK: [[IS_BOOL]]:
-// CHECK:   [[T0:%.*]] = load [[BOOL]]
+// CHECK:   [[T0:%.*]] = load [trivial] [[BOOL]]
 
 enum Foo {
   case A
@@ -38,10 +38,10 @@ func testSwitchEnumOnExistential(_ value: Any) {
   }
 }
 
-// CHECK-LABEL: sil hidden @_TF10switch_isa27testSwitchEnumOnExistentialFP_T_ : $@convention(thin) (@in protocol<>) -> ()
-// CHECK:   checked_cast_addr_br copy_on_success protocol<> in {{%.*}} : $*protocol<> to Foo
-// CHECK:   checked_cast_addr_br copy_on_success protocol<> in {{%.*}} : $*protocol<> to Bar<Int>
-// CHECK:   checked_cast_addr_br copy_on_success protocol<> in {{%.*}} : $*protocol<> to Bar<Foo>
+// CHECK-LABEL: sil hidden @_TF10switch_isa27testSwitchEnumOnExistentialFP_T_ : $@convention(thin) (@in Any) -> ()
+// CHECK:   checked_cast_addr_br copy_on_success Any in {{%.*}} : $*Any to Foo
+// CHECK:   checked_cast_addr_br copy_on_success Any in {{%.*}} : $*Any to Bar<Int>
+// CHECK:   checked_cast_addr_br copy_on_success Any in {{%.*}} : $*Any to Bar<Foo>
 
 class B {}
 class D: B {}
@@ -57,11 +57,11 @@ func guardFn(_ l: D, _ r: D) -> Bool { return true }
 // CHECK:         function_ref @_TF10switch_isa7guardFnFTCS_1DS0__Sb
 // CHECK:         cond_br {{%.*}}, [[GUARD_YES:bb[0-9]+]], [[GUARD_NO:bb[0-9]+]]
 // CHECK:       [[GUARD_NO]]:
-// CHECK-NEXT:    strong_release [[R2:%.*]] : $D
-// CHECK-NEXT:    strong_release [[L2:%.*]] : $D
+// CHECK-NEXT:    destroy_value [[R2:%.*]] : $D
+// CHECK-NEXT:    destroy_value [[L2:%.*]] : $D
 // CHECK-NEXT:    br [[CONT:bb[0-9]+]]
 // CHECK:       [[L_CAST_NO]]:
-// CHECK-NEXT:    strong_release [[R2:%.*]] : $D
+// CHECK-NEXT:    destroy_value [[R2:%.*]] : $D
 // CHECK-NEXT:    br [[CONT]]
 func testSwitchTwoIsPatternsWithGuard(_ l: B, r: B) {
   switch (l, r) {

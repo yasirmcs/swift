@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -426,25 +426,6 @@ void CallSiteDescriptor::extendArgumentLifetime(SILValue Arg) const {
   }
 }
 
-static void specializeClosure(ClosureInfo &CInfo,
-                              CallSiteDescriptor &CallDesc) {
-  auto NewFName = CallDesc.createName();
-  DEBUG(llvm::dbgs() << "    Perform optimizations with new name " << NewFName
-                     << '\n');
-
-  // Then see if we already have a specialized version of this function in our
-  // module.
-  SILFunction *NewF = CInfo.Closure->getModule().lookUpFunction(NewFName);
-
-  // If not, create a specialized version of ApplyCallee calling the closure
-  // directly.
-  if (!NewF)
-    NewF = ClosureSpecCloner::cloneFunction(CallDesc, NewFName);
-
-  // Rewrite the call
-  rewriteApplyInst(CallDesc, NewF);
-}
-
 static bool isSupportedClosure(const SILInstruction *Closure) {
   if (!isSupportedClosureKind(Closure))
     return false;
@@ -475,12 +456,11 @@ static bool isSupportedClosure(const SILInstruction *Closure) {
   }
 
   // Make sure that it is a simple partial apply (i.e. its callee is a
-  // function_ref). We also do not handle indirect results currently in the
-  // closure so make sure that does not happen at this point.
+  // function_ref).
   //
   // TODO: We can probably handle other partial applies here.
   auto *FRI = dyn_cast<FunctionRefInst>(Callee);
-  if (!FRI || FRI->getFunctionType()->hasIndirectResults())
+  if (!FRI)
     return false;
 
   // Otherwise, we do support specializing this closure.
@@ -568,12 +548,15 @@ ClosureSpecCloner::initCloned(const CallSiteDescriptor &CallSiteDesc,
       // original function was de-serialized) and would not be code-gen'd.
       getSpecializedLinkage(ClosureUser, ClosureUser->getLinkage()),
       ClonedName, ClonedTy,
-      ClosureUser->getContextGenericParams(), ClosureUser->getLocation(),
+      ClosureUser->getGenericEnvironment(), ClosureUser->getLocation(),
       IsBare, ClosureUser->isTransparent(), CallSiteDesc.isFragile(),
       ClosureUser->isThunk(), ClosureUser->getClassVisibility(),
       ClosureUser->getInlineStrategy(), ClosureUser->getEffectsKind(),
       ClosureUser, ClosureUser->getDebugScope());
   Fn->setDeclCtx(ClosureUser->getDeclContext());
+  if (ClosureUser->hasUnqualifiedOwnership()) {
+    Fn->setUnqualifiedOwnership();
+  }
   for (auto &Attr : ClosureUser->getSemanticsAttrs())
     Fn->addSemanticsAttr(Attr);
   return Fn;
@@ -583,18 +566,16 @@ ClosureSpecCloner::initCloned(const CallSiteDescriptor &CallSiteDesc,
 /// necessary. This is where we create the actual specialized BB Arguments.
 void ClosureSpecCloner::populateCloned() {
   SILFunction *Cloned = getCloned();
-  SILModule &M = Cloned->getModule();
-
   SILFunction *ClosureUser = CallSiteDesc.getApplyCallee();
 
   // Create arguments for the entry block.
   SILBasicBlock *ClosureUserEntryBB = &*ClosureUser->begin();
-  SILBasicBlock *ClonedEntryBB = new (M) SILBasicBlock(Cloned);
+  SILBasicBlock *ClonedEntryBB = Cloned->createBasicBlock();
 
   // Remove the closure argument.
   SILArgument *ClosureArg = nullptr;
-  for (size_t i = 0, e = ClosureUserEntryBB->bbarg_size(); i != e; ++i) {
-    SILArgument *Arg = ClosureUserEntryBB->getBBArg(i);
+  for (size_t i = 0, e = ClosureUserEntryBB->args_size(); i != e; ++i) {
+    SILArgument *Arg = ClosureUserEntryBB->getArgument(i);
     if (i == CallSiteDesc.getClosureIndex()) {
       ClosureArg = Arg;
       continue;
@@ -602,8 +583,7 @@ void ClosureSpecCloner::populateCloned() {
 
     // Otherwise, create a new argument which copies the original argument
     SILValue MappedValue =
-      new (M) SILArgument(ClonedEntryBB, Arg->getType(), Arg->getDecl());
-
+        ClonedEntryBB->createArgument(Arg->getType(), Arg->getDecl());
     ValueMap.insert(std::make_pair(Arg, MappedValue));
   }
 
@@ -620,8 +600,7 @@ void ClosureSpecCloner::populateCloned() {
   unsigned NumNotCaptured = NumTotalParams - CallSiteDesc.getNumArguments();
   llvm::SmallVector<SILValue, 4> NewPAIArgs;
   for (auto &PInfo : ClosedOverFunTy->getParameters().slice(NumNotCaptured)) {
-    SILValue MappedValue =
-      new (M) SILArgument(ClonedEntryBB, PInfo.getSILType());
+    SILValue MappedValue = ClonedEntryBB->createArgument(PInfo.getSILType());
     NewPAIArgs.push_back(MappedValue);
   }
 
@@ -674,7 +653,7 @@ void ClosureSpecCloner::populateCloned() {
       auto NoReturnApply = FullApplySite::isa(&*PrevIter);
 
       // We insert the release value right before the no return apply so that if
-      // the partial apply is passed into the @noreturn function as an @owned
+      // the partial apply is passed into the no-return function as an @owned
       // value, we will retain the partial apply before we release it and
       // potentially eliminate it.
       Builder.setInsertionPoint(NoReturnApply.getInstruction());
@@ -701,7 +680,7 @@ public:
   void gatherCallSites(SILFunction *Caller,
                        llvm::SmallVectorImpl<ClosureInfo*> &ClosureCandidates,
                        llvm::DenseSet<FullApplySite> &MultipleClosureAI);
-  bool specialize(SILFunction *Caller);
+  bool specialize(SILFunction *Caller, SILFunctionTransform *SFT);
 
   ArrayRef<SILInstruction *> getPropagatedClosures() {
     if (IsPropagatedClosuresUniqued)
@@ -832,7 +811,8 @@ void ClosureSpecializer::gatherCallSites(
   }
 }
 
-bool ClosureSpecializer::specialize(SILFunction *Caller) {
+bool ClosureSpecializer::specialize(SILFunction *Caller,
+                                    SILFunctionTransform *SFT) {
   DEBUG(llvm::dbgs() << "Optimizing callsites that take closure argument in "
                      << Caller->getName() << '\n');
 
@@ -850,7 +830,24 @@ bool ClosureSpecializer::specialize(SILFunction *Caller) {
       if (MultipleClosureAI.count(CSDesc.getApplyInst()))
         continue;
 
-      specializeClosure(*CInfo, CSDesc);
+      auto NewFName = CSDesc.createName();
+      DEBUG(llvm::dbgs() << "    Perform optimizations with new name "
+                         << NewFName << '\n');
+
+      // Then see if we already have a specialized version of this function in
+      // our module.
+      SILFunction *NewF = CInfo->Closure->getModule().lookUpFunction(NewFName);
+
+      // If not, create a specialized version of ApplyCallee calling the closure
+      // directly.
+      if (!NewF) {
+        NewF = ClosureSpecCloner::cloneFunction(CSDesc, NewFName);
+        SFT->notifyPassManagerOfFunction(NewF, CSDesc.getApplyCallee());
+      }
+
+      // Rewrite the call
+      rewriteApplyInst(CSDesc, NewF);
+
       PropagatedClosures.push_back(CSDesc.getClosure());
       Changed = true;
     }
@@ -865,57 +862,48 @@ bool ClosureSpecializer::specialize(SILFunction *Caller) {
 
 namespace {
 
-class SILClosureSpecializerTransform : public SILModuleTransform {
+class SILClosureSpecializerTransform : public SILFunctionTransform {
 public:
   SILClosureSpecializerTransform() {}
 
   void run() override {
-    auto *BCA = getAnalysis<BasicCalleeAnalysis>();
+    SILFunction *F = getFunction();
 
-    bool Changed = false;
+    // Don't optimize functions that are marked with the opt.never
+    // attribute.
+    if (!F->shouldOptimize())
+      return;
+
+    // If F is an external declaration, there is nothing to specialize.
+    if (F->isExternalDeclaration())
+      return;
+
     ClosureSpecializer C;
+    if (!C.specialize(F, this))
+      return;
 
-    BottomUpFunctionOrder Ordering(*getModule(), BCA);
+    // If for testing purposes we were asked to not eliminate dead closures,
+    // return.
+    if (EliminateDeadClosures) {
+      // Otherwise, remove any local dead closures that are now dead since we
+      // specialized all of their uses.
+      DEBUG(llvm::dbgs() << "Trying to remove dead closures!\n");
+      for (SILInstruction *Closure : C.getPropagatedClosures()) {
+        DEBUG(llvm::dbgs() << "    Visiting: " << *Closure);
+        if (!tryDeleteDeadClosure(Closure)) {
+          DEBUG(llvm::dbgs() << "        Failed to delete closure!\n");
+          NumPropagatedClosuresNotEliminated++;
+          continue;
+        }
 
-    // Specialize going bottom-up.
-    for (auto *F : Ordering.getFunctions()) {
-      // Don't optimize functions that are marked with the opt.never
-      // attribute.
-      if (!F->shouldOptimize())
-        return;
-
-      // If F is an external declaration, there is nothing to specialize.
-      if (F->isExternalDeclaration())
-        continue;
-
-      Changed |= C.specialize(F);
+        DEBUG(llvm::dbgs() << "        Deleted closure!\n");
+        ++NumPropagatedClosuresEliminated;
+      }
     }
 
     // Invalidate everything since we delete calls as well as add new
     // calls and branches.
-    if (Changed) {
-      invalidateAnalysis(SILAnalysis::InvalidationKind::Everything);
-    }
-
-    // If for testing purposes we were asked to not eliminate dead closures,
-    // return.
-    if (!EliminateDeadClosures)
-      return;
-
-    // Otherwise, remove any local dead closures that are now dead since we
-    // specialized all of their uses.
-    DEBUG(llvm::dbgs() << "Trying to remove dead closures!\n");
-    for (SILInstruction *Closure : C.getPropagatedClosures()) {
-      DEBUG(llvm::dbgs() << "    Visiting: " << *Closure);
-      if (!tryDeleteDeadClosure(Closure)) {
-        DEBUG(llvm::dbgs() << "        Failed to delete closure!\n");
-        NumPropagatedClosuresNotEliminated++;
-        continue;
-      }
-
-      DEBUG(llvm::dbgs() << "        Deleted closure!\n");
-      ++NumPropagatedClosuresEliminated;
-    }
+    invalidateAnalysis(SILAnalysis::InvalidationKind::Everything);
   }
 
   StringRef getName() override { return "Closure Specialization"; }

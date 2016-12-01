@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -31,13 +31,18 @@ public struct UnsafeBufferPointerIterator<Element>
 }
 
 %for Mutable in ('Mutable', ''):
-/// A non-owning pointer to buffer of ${Mutable.lower()} `Element`s stored
-/// contiguously in memory, presenting a `Collection` interface to the
+/// A non-owning pointer to a buffer of ${Mutable.lower()} elements stored
+/// contiguously in memory, presenting a collection interface to the
 /// underlying elements.
 ///
-/// The pointer should be aligned to `alignof(Element.self)`.
+/// The pointer should be aligned to `MemoryLayout<Element>.alignment`.
+
+// FIXME: rdar://18157434 - until this is fixed, this has to be fixed layout
+// to avoid a hang in Foundation, which has the following setup:
+// struct A { struct B { let x: UnsafeMutableBufferPointer<...> } let b: B }
+@_fixed_layout
 public struct Unsafe${Mutable}BufferPointer<Element>
-  : ${Mutable}Indexable, ${Mutable}Collection, RandomAccessCollection {
+  : _${Mutable}Indexable, ${Mutable}Collection, RandomAccessCollection {
 
   public typealias Index = Int
   public typealias IndexDistance = Int
@@ -142,7 +147,7 @@ public struct Unsafe${Mutable}BufferPointer<Element>
     return startIndex..<endIndex
   }
 
-  /// Access the `i`th element in the buffer.
+  /// Accesses the `i`th element in the buffer.
   public subscript(i: Int) -> Element {
     get {
       _debugPrecondition(i >= 0)
@@ -162,21 +167,22 @@ public struct Unsafe${Mutable}BufferPointer<Element>
     -> ${Mutable}RandomAccessSlice<Unsafe${Mutable}BufferPointer<Element>>
   {
     get {
-      // FIXME: swift-3-indexing-model: range check.
-      // FIXME: swift-3-indexing-model: tests.
+      _debugPrecondition(bounds.lowerBound >= startIndex)
+      _debugPrecondition(bounds.upperBound <= endIndex)
       return ${Mutable}RandomAccessSlice(
         base: self, bounds: bounds)
     }
 %  if Mutable:
     set {
-      // FIXME: swift-3-indexing-model: range check.
+      _debugPrecondition(bounds.lowerBound >= startIndex)
+      _debugPrecondition(bounds.upperBound <= endIndex)
       // FIXME: swift-3-indexing-model: tests.
       _writeBackMutableSlice(&self, bounds: bounds, slice: newValue)
     }
 %  end
   }
 
-  /// Construct an Unsafe${Mutable}Pointer over the `count` contiguous
+  /// Creates an Unsafe${Mutable}Pointer over the `count` contiguous
   /// `Element` instances beginning at `start`.
   ///
   /// If `start` is nil, `count` must be 0. However, `count` may be 0 even for
@@ -218,7 +224,7 @@ extension Unsafe${Mutable}BufferPointer : CustomDebugStringConvertible {
   /// A textual representation of `self`, suitable for debugging.
   public var debugDescription: String {
     return "Unsafe${Mutable}BufferPointer"
-      + "(start: \(_position.map(String.init(_:)) ?? "nil"), count: \(count))"
+      + "(start: \(_position.map(String.init(describing:)) ?? "nil"), count: \(count))"
   }
 }
 %end

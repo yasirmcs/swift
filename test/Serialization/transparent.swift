@@ -1,8 +1,8 @@
 // RUN: rm -rf %t
-// RUN: mkdir %t
+// RUN: mkdir -p %t
 // RUN: %target-swift-frontend -emit-module -sil-serialize-all -o %t %S/Inputs/def_transparent.swift
-// RUN: llvm-bcanalyzer %t/def_transparent.swiftmodule | FileCheck %s
-// RUN: %target-swift-frontend -emit-silgen -sil-link-all -I %t %s | FileCheck %s -check-prefix=SIL
+// RUN: llvm-bcanalyzer %t/def_transparent.swiftmodule | %FileCheck %s
+// RUN: %target-swift-frontend -emit-silgen -sil-link-all -I %t %s | %FileCheck %s -check-prefix=SIL
 
 // CHECK-NOT: UnknownCode
 
@@ -12,13 +12,13 @@ import def_transparent
 // SIL: [[RAW:%.+]] = global_addr @_Tv11transparent3rawSb : $*Bool
 // SIL: [[FUNC:%.+]] = function_ref @_TF15def_transparent15testTransparentFT1xSb_Sb : $@convention(thin) (Bool) -> Bool
 // SIL: [[RESULT:%.+]] = apply [[FUNC]]({{%.+}}) : $@convention(thin) (Bool) -> Bool
-// SIL: store [[RESULT]] to [[RAW]] : $*Bool
+// SIL: store [[RESULT]] to [trivial] [[RAW]] : $*Bool
 var raw = testTransparent(x: false)
 
 // SIL: [[TMP:%.+]] = global_addr @_Tv11transparent3tmpVs5Int32 : $*Int32
 // SIL: [[FUNC2:%.+]] = function_ref @_TF15def_transparent11testBuiltinFT_Vs5Int32 : $@convention(thin) () -> Int32
 // SIL: [[RESULT2:%.+]] = apply [[FUNC2]]() : $@convention(thin) () -> Int32
-// SIL: store [[RESULT2]] to [[TMP]] : $*Int32
+// SIL: store [[RESULT2]] to [trivial] [[TMP]] : $*Int32
 var tmp = testBuiltin()
 
 // SIL-LABEL: sil public_external [transparent] [fragile] @_TF15def_transparent15testTransparentFT1xSb_Sb : $@convention(thin) (Bool) -> Bool {
@@ -44,10 +44,10 @@ func wrap_br() {
 // SIL: bb0(%0 : $MaybePair):
 // SIL: retain_value %0 : $MaybePair
 // SIL: switch_enum %0 : $MaybePair, case #MaybePair.Neither!enumelt: bb[[CASE1:[0-9]+]], case #MaybePair.Left!enumelt.1: bb[[CASE2:[0-9]+]], case #MaybePair.Right!enumelt.1: bb[[CASE3:[0-9]+]], case #MaybePair.Both!enumelt.1: bb[[CASE4:[0-9]+]]
-// SIL: bb[[CASE1]]:
-// SIL: bb[[CASE2]](%{{.*}} : $Int32):
-// SIL: bb[[CASE3]](%{{.*}} : $String):
 // SIL: bb[[CASE4]](%{{.*}} : $(Int32, String)):
+// SIL: bb[[CASE3]](%{{.*}} : $String):
+// SIL: bb[[CASE2]](%{{.*}} : $Int32):
+// SIL: bb[[CASE1]]:
 func test_switch(u: MaybePair) {
   do_switch(u: u)
 }

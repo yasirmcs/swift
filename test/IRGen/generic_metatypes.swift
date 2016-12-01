@@ -1,15 +1,15 @@
-// RUN: %swift -target x86_64-apple-macosx10.9 -emit-ir -parse-stdlib -primary-file %s | FileCheck --check-prefix=CHECK --check-prefix=CHECK-64 %s
-// RUN: %swift -target i386-apple-ios7.0 -emit-ir -parse-stdlib -primary-file %s | FileCheck --check-prefix=CHECK --check-prefix=CHECK-32 %s
-// RUN: %swift -target x86_64-apple-ios7.0 -emit-ir -parse-stdlib -primary-file %s | FileCheck --check-prefix=CHECK --check-prefix=CHECK-64 %s
-// RUN: %swift -target i386-apple-tvos9.0 -emit-ir -parse-stdlib -primary-file %s | FileCheck --check-prefix=CHECK --check-prefix=CHECK-32 %s
-// RUN: %swift -target x86_64-apple-tvos9.0 -emit-ir -parse-stdlib -primary-file %s | FileCheck --check-prefix=CHECK --check-prefix=CHECK-64 %s
-// RUN: %swift -target i386-apple-watchos2.0 -emit-ir -parse-stdlib -primary-file %s | FileCheck --check-prefix=CHECK --check-prefix=CHECK-32 %s
-// RUN: %swift -target armv7-apple-ios7.0 -emit-ir -parse-stdlib -primary-file %s | FileCheck --check-prefix=CHECK --check-prefix=CHECK-32 %s
-// RUN: %swift -target arm64-apple-ios7.0 -emit-ir -parse-stdlib -primary-file %s | FileCheck --check-prefix=CHECK --check-prefix=CHECK-64 %s
-// RUN: %swift -target armv7-apple-tvos9.0 -emit-ir -parse-stdlib -primary-file %s | FileCheck --check-prefix=CHECK --check-prefix=CHECK-32 %s
-// RUN: %swift -target arm64-apple-tvos9.0 -emit-ir -parse-stdlib -primary-file %s | FileCheck --check-prefix=CHECK --check-prefix=CHECK-64 %s
-// RUN: %swift -target armv7k-apple-watchos2.0 -emit-ir -parse-stdlib -primary-file %s | FileCheck --check-prefix=CHECK --check-prefix=CHECK-32 %s
-// RUN: %swift -target x86_64-unknown-linux-gnu -disable-objc-interop -emit-ir -parse-stdlib -primary-file %s | FileCheck --check-prefix=CHECK --check-prefix=CHECK-64 %s
+// RUN: %swift -target x86_64-apple-macosx10.9 -emit-ir -parse-stdlib -primary-file %s | %FileCheck --check-prefix=CHECK --check-prefix=CHECK-64 %s
+// RUN: %swift -target i386-apple-ios7.0 -emit-ir -parse-stdlib -primary-file %s | %FileCheck --check-prefix=CHECK --check-prefix=CHECK-32 %s
+// RUN: %swift -target x86_64-apple-ios7.0 -emit-ir -parse-stdlib -primary-file %s | %FileCheck --check-prefix=CHECK --check-prefix=CHECK-64 %s
+// RUN: %swift -target i386-apple-tvos9.0 -emit-ir -parse-stdlib -primary-file %s | %FileCheck --check-prefix=CHECK --check-prefix=CHECK-32 %s
+// RUN: %swift -target x86_64-apple-tvos9.0 -emit-ir -parse-stdlib -primary-file %s | %FileCheck --check-prefix=CHECK --check-prefix=CHECK-64 %s
+// RUN: %swift -target i386-apple-watchos2.0 -emit-ir -parse-stdlib -primary-file %s | %FileCheck --check-prefix=CHECK --check-prefix=CHECK-32 %s
+// RUN: %swift -target armv7-apple-ios7.0 -emit-ir -parse-stdlib -primary-file %s | %FileCheck --check-prefix=CHECK --check-prefix=CHECK-32 %s
+// RUN: %swift -target arm64-apple-ios7.0 -emit-ir -parse-stdlib -primary-file %s | %FileCheck --check-prefix=CHECK --check-prefix=CHECK-64 %s
+// RUN: %swift -target armv7-apple-tvos9.0 -emit-ir -parse-stdlib -primary-file %s | %FileCheck --check-prefix=CHECK --check-prefix=CHECK-32 %s
+// RUN: %swift -target arm64-apple-tvos9.0 -emit-ir -parse-stdlib -primary-file %s | %FileCheck --check-prefix=CHECK --check-prefix=CHECK-64 %s
+// RUN: %swift -target armv7k-apple-watchos2.0 -emit-ir -parse-stdlib -primary-file %s | %FileCheck --check-prefix=CHECK --check-prefix=CHECK-32 %s
+// RUN: %swift -target x86_64-unknown-linux-gnu -disable-objc-interop -emit-ir -parse-stdlib -primary-file %s | %FileCheck --check-prefix=CHECK --check-prefix=CHECK-64 %s
 
 // REQUIRES: X86
 
@@ -17,7 +17,7 @@
 func genericTypeof<T>(_ x: T) -> T.Type {
   // CHECK: [[METATYPE:%.*]] = call %swift.type* @swift_getDynamicType(%swift.opaque* {{.*}}, %swift.type* [[TYPE]])
   // CHECK: ret %swift.type* [[METATYPE]]
-  return x.dynamicType
+  return type(of: x)
 }
 
 struct Foo {}
@@ -69,7 +69,7 @@ func protocolTypeof(_ x: Bas) -> Bas.Type {
   // CHECK: [[T0:%.*]] = insertvalue { %swift.type*, i8** } undef, %swift.type* [[METATYPE]], 0
   // CHECK: [[T1:%.*]] = insertvalue { %swift.type*, i8** } [[T0]], i8** [[WTABLE]], 1
   // CHECK: ret { %swift.type*, i8** } [[T1]]
-  return x.dynamicType
+  return type(of: x)
 }
 
 struct Zim : Bas {}
@@ -125,7 +125,7 @@ func makeGenericMetatypes() {
 // CHECK:   [[BUFFER_ELT:%.*]] = getelementptr inbounds { %swift.type* }, { %swift.type* }* [[BUFFER]], i32 0, i32 0
 // CHECK:   store %swift.type* %0, %swift.type** [[BUFFER_ELT]]
 // CHECK:   [[BUFFER_PTR:%.*]] = bitcast { %swift.type* }* [[BUFFER]] to i8*
-// CHECK:   [[METADATA:%.*]] = call %swift.type* @rt_swift_getGenericMetadata(%swift.type_pattern* {{.*}} @_TMPV17generic_metatypes6OneArg {{.*}}, i8* [[BUFFER_PTR]])
+// CHECK:   [[METADATA:%.*]] = call %swift.type* @swift_rt_swift_getGenericMetadata(%swift.type_pattern* {{.*}} @_TMPV17generic_metatypes6OneArg {{.*}}, i8* [[BUFFER_PTR]])
 // CHECK:   [[BUFFER_PTR:%.*]] = bitcast { %swift.type* }* [[BUFFER]] to i8*
 // CHECK:   call void @llvm.lifetime.end
 // CHECK:   ret %swift.type* [[METADATA]]
@@ -143,7 +143,7 @@ func makeGenericMetatypes() {
 // CHECK:   [[BUFFER_ELT:%.*]] = getelementptr inbounds { %swift.type*, %swift.type* }, { %swift.type*, %swift.type* }* [[BUFFER]], i32 0, i32 1
 // CHECK:   store %swift.type* %1, %swift.type** [[BUFFER_ELT]]
 // CHECK:   [[BUFFER_PTR:%.*]] = bitcast { %swift.type*, %swift.type* }* [[BUFFER]] to i8*
-// CHECK:   [[METADATA:%.*]] = call %swift.type* @rt_swift_getGenericMetadata(%swift.type_pattern* {{.*}} @_TMPV17generic_metatypes7TwoArgs {{.*}}, i8* [[BUFFER_PTR]])
+// CHECK:   [[METADATA:%.*]] = call %swift.type* @swift_rt_swift_getGenericMetadata(%swift.type_pattern* {{.*}} @_TMPV17generic_metatypes7TwoArgs {{.*}}, i8* [[BUFFER_PTR]])
 // CHECK:   [[BUFFER_PTR:%.*]] = bitcast { %swift.type*, %swift.type* }* [[BUFFER]] to i8*
 // CHECK:   call void @llvm.lifetime.end
 // CHECK:   ret %swift.type* [[METADATA]]
@@ -163,7 +163,7 @@ func makeGenericMetatypes() {
 // CHECK:   [[BUFFER_ELT:%.*]] = getelementptr inbounds { %swift.type*, %swift.type*, %swift.type* }, { %swift.type*, %swift.type*, %swift.type* }* [[BUFFER]], i32 0, i32 2
 // CHECK:   store %swift.type* %2, %swift.type** [[BUFFER_ELT]]
 // CHECK:   [[BUFFER_PTR:%.*]] = bitcast { %swift.type*, %swift.type*, %swift.type* }* [[BUFFER]] to i8*
-// CHECK:   [[METADATA:%.*]] = call %swift.type* @rt_swift_getGenericMetadata(%swift.type_pattern* {{.*}} @_TMPV17generic_metatypes9ThreeArgs {{.*}}, i8* [[BUFFER_PTR]])
+// CHECK:   [[METADATA:%.*]] = call %swift.type* @swift_rt_swift_getGenericMetadata(%swift.type_pattern* {{.*}} @_TMPV17generic_metatypes9ThreeArgs {{.*}}, i8* [[BUFFER_PTR]])
 // CHECK:   [[BUFFER_PTR:%.*]] = bitcast { %swift.type*, %swift.type*, %swift.type* }* [[BUFFER]] to i8*
 // CHECK:   call void @llvm.lifetime.end
 // CHECK:   ret %swift.type* [[METADATA]]
@@ -185,7 +185,7 @@ func makeGenericMetatypes() {
 // CHECK:   [[BUFFER_ELT:%.*]] = getelementptr inbounds { %swift.type*, %swift.type*, %swift.type*, %swift.type* }, { %swift.type*, %swift.type*, %swift.type*, %swift.type* }* [[BUFFER]], i32 0, i32 3
 // CHECK:   store %swift.type* %3, %swift.type** [[BUFFER_ELT]]
 // CHECK:   [[BUFFER_PTR:%.*]] = bitcast { %swift.type*, %swift.type*, %swift.type*, %swift.type* }* [[BUFFER]] to i8*
-// CHECK:   [[METADATA:%.*]] = call %swift.type* @rt_swift_getGenericMetadata(%swift.type_pattern* {{.*}} @_TMPV17generic_metatypes8FourArgs {{.*}}, i8* [[BUFFER_PTR]])
+// CHECK:   [[METADATA:%.*]] = call %swift.type* @swift_rt_swift_getGenericMetadata(%swift.type_pattern* {{.*}} @_TMPV17generic_metatypes8FourArgs {{.*}}, i8* [[BUFFER_PTR]])
 // CHECK:   [[BUFFER_PTR:%.*]] = bitcast { %swift.type*, %swift.type*, %swift.type*, %swift.type* }* [[BUFFER]] to i8*
 // CHECK:   call void @llvm.lifetime.end
 // CHECK:   ret %swift.type* [[METADATA]]
@@ -207,7 +207,7 @@ func makeGenericMetatypes() {
 // CHECK:   [[BUFFER_ELT:%.*]] = getelementptr inbounds { %swift.type*, %swift.type*, %swift.type*, %swift.type*, %swift.type* }, { %swift.type*, %swift.type*, %swift.type*, %swift.type*, %swift.type* }* [[BUFFER]], i32 0, i32 3
 // CHECK:   store %swift.type* %3, %swift.type** [[BUFFER_ELT]]
 // CHECK:   [[BUFFER_PTR:%.*]] = bitcast { %swift.type*, %swift.type*, %swift.type*, %swift.type*, %swift.type* }* [[BUFFER]] to i8*
-// CHECK:   [[METADATA:%.*]] = call %swift.type* @rt_swift_getGenericMetadata(%swift.type_pattern* {{.*}} @_TMPV17generic_metatypes8FiveArgs {{.*}}, i8* [[BUFFER_PTR]])
+// CHECK:   [[METADATA:%.*]] = call %swift.type* @swift_rt_swift_getGenericMetadata(%swift.type_pattern* {{.*}} @_TMPV17generic_metatypes8FiveArgs {{.*}}, i8* [[BUFFER_PTR]])
 // CHECK:   [[BUFFER_PTR:%.*]] = bitcast { %swift.type*, %swift.type*, %swift.type*, %swift.type*, %swift.type* }* [[BUFFER]] to i8*
 // CHECK:   call void @llvm.lifetime.end
 // CHECK:   ret %swift.type* [[METADATA]]

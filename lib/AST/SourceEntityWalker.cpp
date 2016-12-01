@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -109,6 +109,12 @@ bool SemaAnnotator::walkToDeclPre(Decl *D) {
     Loc = OpD->getLoc();
     if (Loc.isValid())
       NameLen = OpD->getName().getLength();
+
+  } else if (auto PrecD = dyn_cast<PrecedenceGroupDecl>(D)) {
+    Loc = PrecD->getLoc();
+    if (Loc.isValid())
+      NameLen = PrecD->getName().getLength();
+
   } else {
     return true;
   }
@@ -420,11 +426,13 @@ bool SemaAnnotator::passCallArgNames(Expr *Fn, TupleExpr *TupleE) {
 
   ArrayRef<Identifier> ArgNames = TupleE->getElementNames();
   ArrayRef<SourceLoc> ArgLocs = TupleE->getElementNameLocs();
-  assert(ArgNames.size() == ArgLocs.size());
   for (auto i : indices(ArgNames)) {
     Identifier Name = ArgNames[i];
+    if (Name.empty())
+      continue;
+
     SourceLoc Loc = ArgLocs[i];
-    if (Name.empty() || Loc.isInvalid())
+    if (Loc.isInvalid())
       continue;
 
     CharSourceRange Range{ Loc, Name.getLength() };

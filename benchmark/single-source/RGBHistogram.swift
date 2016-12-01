@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -92,9 +92,11 @@ func isCorrectHistogram(_ histogram: [(key: rrggbb_t, value: Int)]) -> Bool {
            histogram[156].0 == 0x003B8D96 && histogram[156].1 == 1
 }
 
-func createSortedSparseRGBHistogram
-        <S: Sequence where S.Iterator.Element == rrggbb_t>
-        (_ samples: S) -> [(key: rrggbb_t, value: Int)] {
+func createSortedSparseRGBHistogram<S : Sequence>(
+  _ samples: S
+) -> [(key: rrggbb_t, value: Int)]
+  where S.Iterator.Element == rrggbb_t
+{
     var histogram = Dictionary<rrggbb_t, Int>()
 
     for sample in samples {
@@ -111,23 +113,20 @@ func createSortedSparseRGBHistogram
     }
 }
 
-class Box<T : Hashable where T : Equatable> : Hashable {
+class Box<T : Hashable> : Hashable {
   var value: T
 
   init(_ v: T) {
     value = v
   }
 
-  var hashValue : Int {
+  var hashValue: Int {
     return value.hashValue
   }
-}
 
-extension Box : Equatable {
-}
-
-func ==<T: Equatable>(lhs: Box<T>, rhs: Box<T>) -> Bool {
-  return lhs.value == rhs.value
+  static func ==<T: Equatable>(lhs: Box<T>, rhs: Box<T>) -> Bool {
+    return lhs.value == rhs.value
+  }
 }
 
 func isCorrectHistogramOfObjects(_ histogram: [(key: Box<rrggbb_t>, value: Box<Int>)]) -> Bool {
@@ -136,9 +135,11 @@ func isCorrectHistogramOfObjects(_ histogram: [(key: Box<rrggbb_t>, value: Box<I
            histogram[156].0.value == 0x003B8D96 && histogram[156].1.value == 1
 }
 
-func createSortedSparseRGBHistogramOfObjects
-        <S: Sequence where S.Iterator.Element == rrggbb_t>
-        (_ samples: S) -> [(key: Box<rrggbb_t>, value: Box<Int>)] {
+func createSortedSparseRGBHistogramOfObjects<S : Sequence>(
+  _ samples: S
+) -> [(key: Box<rrggbb_t>, value: Box<Int>)]
+  where S.Iterator.Element == rrggbb_t
+{
     var histogram = Dictionary<Box<rrggbb_t>, Box<Int>>()
 
     for sample in samples {

@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -43,6 +43,7 @@ class ProtocolConformance;
 /// A serialized module, along with the tools to access it.
 class ModuleFile : public LazyMemberLoader {
   friend class SerializedASTFile;
+  friend class SILDeserializer;
   using Status = serialization::Status;
 
   /// A reference back to the AST representation of the file.
@@ -69,12 +70,16 @@ class ModuleFile : public LazyMemberLoader {
 
   /// The name of the module.
   StringRef Name;
+  friend StringRef getNameOfModule(const ModuleFile *);
 
   /// The target the module was built for.
   StringRef TargetTriple;
 
   /// The data blob containing all of the module's identifiers.
   StringRef IdentifierData;
+
+  /// A callback to be invoked every time a type was deserialized.
+  std::function<void(Type)> DeserializedTypeCallback;
 
 public:
   /// Represents another module that has been imported as a dependency.
@@ -276,6 +281,7 @@ private:
 
   std::unique_ptr<SerializedDeclTable> TopLevelDecls;
   std::unique_ptr<SerializedDeclTable> OperatorDecls;
+  std::unique_ptr<SerializedDeclTable> PrecedenceGroupDecls;
   std::unique_ptr<SerializedDeclTable> ExtensionDecls;
   std::unique_ptr<SerializedDeclTable> ClassMembersByName;
   std::unique_ptr<SerializedDeclTable> OperatorMethodDecls;
@@ -358,8 +364,11 @@ public:
   /// as being malformed.
   Status error(Status issue = Status::Malformed) {
     assert(issue != Status::Valid);
-    assert((!FileContext || issue != Status::Malformed) &&
-           "error deserializing an individual record");
+    // This would normally be an assertion but it's more useful to print the
+    // PrettyStackTrace here even in no-asserts builds. Malformed modules are
+    // generally unrecoverable.
+    if (FileContext && issue == Status::Malformed)
+      abort();
     setStatus(issue);
     return getStatus();
   }
@@ -421,11 +430,33 @@ private:
   ParameterList *readParameterList();
   
   GenericParamList *maybeGetOrReadGenericParams(serialization::DeclID contextID,
-                                                DeclContext *DC,
-                                                llvm::BitstreamCursor &Cursor);
+                                                DeclContext *DC);
+
+  /// Reads a generic param list from \c DeclTypeCursor.
+  ///
+  /// If the record at the cursor is not a generic param list, returns null
+  /// without moving the cursor.
+  GenericParamList *maybeReadGenericParams(DeclContext *DC,
+                                     GenericParamList *outerParams = nullptr);
 
   /// Reads a set of requirements from \c DeclTypeCursor.
-  void readGenericRequirements(SmallVectorImpl<Requirement> &requirements);
+  void readGenericRequirements(SmallVectorImpl<Requirement> &requirements,
+                               llvm::BitstreamCursor &Cursor);
+
+  /// Reads a GenericEnvironment from \c DeclTypeCursor.
+  ///
+  /// The optional requirements are used to construct the signature without
+  /// attempting to deserialize any requirements, such as when reading SIL.
+  GenericEnvironment *readGenericEnvironment(
+      llvm::BitstreamCursor &Cursor,
+      Optional<ArrayRef<Requirement>> optRequirements = None);
+
+  /// Reads a GenericEnvironment followed by requirements from \c DeclTypeCursor.
+  ///
+  /// Returns the GenericEnvironment.
+  ///
+  /// Returns nullptr if there's no generic signature here.
+  GenericEnvironment *maybeReadGenericEnvironment();
 
   /// Populates the vector with members of a DeclContext from \c DeclTypeCursor.
   ///
@@ -524,6 +555,12 @@ public:
   ///
   /// If none is found, returns null.
   OperatorDecl *lookupOperator(Identifier name, DeclKind fixity);
+
+  /// Searches the module's precedence groups for one with the given
+  /// name and fixity.
+  ///
+  /// If none is found, returns null.
+  PrecedenceGroupDecl *lookupPrecedenceGroup(Identifier name);
 
   /// Adds any imported modules to the given vector.
   void getImportedModules(SmallVectorImpl<Module::ImportedModule> &results,
@@ -671,22 +708,18 @@ public:
   /// Reads a substitution record from \c DeclTypeCursor.
   ///
   /// If the record at the cursor is not a substitution, returns None.
-  Optional<Substitution> maybeReadSubstitution(llvm::BitstreamCursor &Cursor);
+  Optional<Substitution> maybeReadSubstitution(llvm::BitstreamCursor &Cursor,
+                                               GenericEnvironment *genericEnv =
+                                                nullptr);
 
   /// Recursively reads a protocol conformance from the given cursor.
-  ProtocolConformanceRef readConformance(llvm::BitstreamCursor &Cursor);
+  ProtocolConformanceRef readConformance(llvm::BitstreamCursor &Cursor,
+                                         GenericEnvironment *genericEnv =
+                                           nullptr);
 
   /// Read the given normal conformance from the current module file.
   NormalProtocolConformance *
   readNormalConformance(serialization::NormalConformanceID id);
-
-  /// Reads a generic param list from \c DeclTypeCursor.
-  ///
-  /// If the record at the cursor is not a generic param list, returns null
-  /// without moving the cursor.
-  GenericParamList *maybeReadGenericParams(DeclContext *DC,
-                                     llvm::BitstreamCursor &Cursor,
-                                     GenericParamList *outerParams = nullptr);
 
   /// Reads a foreign error conformance from \c DeclTypeCursor, if present.
   Optional<ForeignErrorConvention> maybeReadForeignErrorConvention();

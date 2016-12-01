@@ -1,4 +1,4 @@
-// RUN: %sourcekitd-test -req=index %s -- -serialize-diagnostics -serialize-diagnostics-path %t.dia %s | %sed_clean > %t.response
+// RUN: %sourcekitd-test -req=index %s -- -serialize-diagnostics-path %t.dia %s | %sed_clean > %t.response
 // RUN: diff -u %s.response %t.response
 
 // This test verifies that, when Objective-C interop is disabled, private
@@ -13,7 +13,7 @@ struct MyStruct {
   func test_startsWithTest_takesNoParams_returnsVoid_butIsDefinedOnAStruct() {}
 }
 
-private class MyPrivateClass() {
+private class MyPrivateClass {
   func test_startsWithTest_takesNoParams_returnsVoid_butIsPrivate() {}
 }
 

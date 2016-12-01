@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -48,10 +48,7 @@ using namespace swift;
 SWIFT_RUNTIME_STDLIB_INTERFACE
 @interface _SwiftNativeNS${Class}Base : NS${Class}
 {
-  // TODO: Workaround for rdar://problem/18950072
-  // SWIFT_HEAPOBJECT_NON_OBJC_MEMBERS;
-  uint32_t __magic_refCount;
-  uint32_t __magic_weakRefCount;
+  SWIFT_HEAPOBJECT_NON_OBJC_MEMBERS;
 }
 @end
 

@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -67,13 +67,19 @@ class IRGenDebugInfo {
   llvm::DenseMap<TypeBase *, llvm::TrackingMDNodeRef> DITypeCache;
   llvm::StringMap<llvm::TrackingMDNodeRef> DIModuleCache;
   TrackingDIRefMap DIRefMap;
+  std::vector<std::pair<const SILDebugScope *, llvm::TrackingMDNodeRef>>
+      LastInlineChain;
+
+  /// A list of replaceable fwddecls that need to be RAUWed at the end.
+  std::vector<std::pair<TypeBase *, llvm::TrackingMDRef>> ReplaceMap;
 
   llvm::BumpPtrAllocator DebugInfoNames;
   StringRef CWDName;                    /// The current working directory.
   llvm::DICompileUnit *TheCU = nullptr; /// The current compilation unit.
   llvm::DIFile *MainFile = nullptr;     /// The main file.
   llvm::DIModule *MainModule = nullptr; /// The current module.
-  llvm::MDNode *EntryPointFn = nullptr; /// Scope of SWIFT_ENTRY_POINT_FUNCTION.
+  llvm::DIScope *EntryPointFn =
+      nullptr;                          /// Scope of SWIFT_ENTRY_POINT_FUNCTION.
   TypeAliasDecl *MetadataTypeDecl;      /// The type decl for swift.type.
   llvm::DIType *InternalType; /// Catch-all type for opaque internal types.
 
@@ -128,6 +134,12 @@ public:
     Builder.SetCurrentDebugLocation(DL);
   }
 
+  /// Set the location for SWIFT_ENTRY_POINT_FUNCTION.
+  void setEntryPointLoc(IRBuilder &Builder);
+
+  /// Return the scope for  SWIFT_ENTRY_POINT_FUNCTION.
+  llvm::DIScope *getEntryPointFn();
+  
   /// Emit debug info for an import declaration.
   ///
   /// The DWARF output for import decls is similar to that of a using
@@ -170,19 +182,20 @@ public:
   void emitVariableDeclaration(IRBuilder &Builder,
                                ArrayRef<llvm::Value *> Storage,
                                DebugTypeInfo Ty, const SILDebugScope *DS,
-                               StringRef Name, unsigned ArgNo = 0,
+                               ValueDecl *VarDecl, StringRef Name,
+                               unsigned ArgNo = 0,
                                IndirectionKind = DirectValue,
                                ArtificialKind = RealValue);
 
   /// Emit a dbg.declare or dbg.value intrinsic, depending on Storage.
-  void emitDbgIntrinsic(llvm::BasicBlock *BB, llvm::Value *Storage,
+  void emitDbgIntrinsic(IRBuilder &Builder, llvm::Value *Storage,
                         llvm::DILocalVariable *Var, llvm::DIExpression *Expr,
                         unsigned Line, unsigned Col, llvm::DILocalScope *Scope,
                         const SILDebugScope *DS);
 
   /// Create debug metadata for a global variable.
-  void emitGlobalVariableDeclaration(llvm::Constant *Storage, StringRef Name,
-                                     StringRef LinkageName,
+  void emitGlobalVariableDeclaration(llvm::GlobalVariable *Storage,
+                                     StringRef Name, StringRef LinkageName,
                                      DebugTypeInfo DebugType,
                                      bool IsLocalToUnit,
                                      Optional<SILLocation> Loc);
@@ -306,6 +319,17 @@ private:
   llvm::DIType *createDoublePointerSizedStruct(
       llvm::DIScope *Scope, StringRef Name, llvm::DIType *PointeeTy,
       llvm::DIFile *File, unsigned Line, unsigned Flags, StringRef MangledName);
+
+  /// Create DWARF debug info for a function pointer type.
+  llvm::DIType *createFunctionPointer(DebugTypeInfo DbgTy, llvm::DIScope *Scope,
+                                      unsigned SizeInBits, unsigned AlignInBits,
+                                      unsigned Flags, StringRef MangledName);
+
+  /// Create DWARF debug info for a tuple type.
+  llvm::DIType *createTuple(DebugTypeInfo DbgTy, llvm::DIScope *Scope,
+                            unsigned SizeInBits, unsigned AlignInBits,
+                            unsigned Flags, StringRef MangledName);
+
   /// Create an opaque struct with a mangled name.
   llvm::DIType *createOpaqueStruct(llvm::DIScope *Scope, StringRef Name,
                                    llvm::DIFile *File, unsigned Line,

@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -81,7 +81,8 @@ public func withArrayOfCStrings<R>(
 
   return argsBuffer.withUnsafeMutableBufferPointer {
     (argsBuffer) in
-    let ptr = UnsafeMutablePointer<CChar>(argsBuffer.baseAddress!)
+    let ptr = UnsafeMutableRawPointer(argsBuffer.baseAddress!).bindMemory(
+      to: CChar.self, capacity: argsBuffer.count)
     var cStrings: [UnsafeMutablePointer<CChar>?] = argsOffsets.map { ptr + $0 }
     cStrings[cStrings.count - 1] = nil
     return body(cStrings)

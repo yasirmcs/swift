@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -15,10 +15,13 @@
 //===----------------------------------------------------------------------===//
 
 #include "swift/AST/Module.h"
+#include "swift/AST/AccessScope.h"
 #include "swift/AST/AST.h"
 #include "swift/AST/ASTPrinter.h"
+#include "swift/AST/ASTScope.h"
 #include "swift/AST/ASTWalker.h"
 #include "swift/AST/DiagnosticsSema.h"
+#include "swift/AST/GenericEnvironment.h"
 #include "swift/AST/LazyResolver.h"
 #include "swift/AST/LinkLibrary.h"
 #include "swift/AST/ModuleLoader.h"
@@ -81,6 +84,7 @@ void BuiltinUnit::LookupCache::lookupValue(
                                           /*genericparams*/nullptr,
                                           const_cast<BuiltinUnit*>(&M));
       TAD->computeType();
+      TAD->setInterfaceType(TAD->getType());
       TAD->setAccessibility(Accessibility::Public);
       Entry = TAD;
     }
@@ -343,39 +347,17 @@ ModuleDecl::ModuleDecl(Identifier name, ASTContext &ctx)
   ctx.addDestructorCleanup(*this);
   setImplicit();
   setType(ModuleType::get(this));
+  setInterfaceType(ModuleType::get(this));
   setAccessibility(Accessibility::Public);
 }
 
 void Module::addFile(FileUnit &newFile) {
-  assert(!isa<DerivedFileUnit>(newFile) &&
-         "DerivedFileUnits are added automatically");
-
   // Require Main and REPL files to be the first file added.
   assert(Files.empty() ||
          !isa<SourceFile>(newFile) ||
          cast<SourceFile>(newFile).Kind == SourceFileKind::Library ||
          cast<SourceFile>(newFile).Kind == SourceFileKind::SIL);
   Files.push_back(&newFile);
-
-  switch (newFile.getKind()) {
-  case FileUnitKind::Source:
-  case FileUnitKind::ClangModule: {
-    for (auto File : Files) {
-      if (isa<DerivedFileUnit>(File))
-        return;
-    }
-    auto DFU = new (getASTContext()) DerivedFileUnit(*this);
-    Files.push_back(DFU);
-    break;
-  }
-
-  case FileUnitKind::Builtin:
-  case FileUnitKind::SerializedAST:
-    break;
-
-  case FileUnitKind::Derived:
-    llvm_unreachable("DerivedFileUnits are added automatically");
-  }
 }
 
 void Module::removeFile(FileUnit &existingFile) {
@@ -388,44 +370,6 @@ void Module::removeFile(FileUnit &existingFile) {
   // Adjust for the std::reverse_iterator offset.
   ++I;
   Files.erase(I.base());
-}
-
-DerivedFileUnit &Module::getDerivedFileUnit() const {
-  for (auto File : Files) {
-    if (auto DFU = dyn_cast<DerivedFileUnit>(File))
-      return *DFU;
-  }
-  llvm_unreachable("the client should not be calling this function if "
-                   "there is no DerivedFileUnit");
-}
-
-VarDecl *Module::getDSOHandle() {
-  if (DSOHandle)
-    return DSOHandle;
-
-  auto unsafeMutablePtr = getASTContext().getUnsafeMutablePointerDecl();
-  if (!unsafeMutablePtr)
-    return nullptr;
-
-  Type arg;
-  auto &ctx = getASTContext();
-  if (auto voidDecl = ctx.getVoidDecl()) {
-    arg = voidDecl->getDeclaredInterfaceType();
-  } else {
-    arg = TupleType::getEmpty(ctx);
-  }
-  
-  Type type = BoundGenericType::get(unsafeMutablePtr, Type(), { arg });
-  auto handleVar = new (ctx) VarDecl(/*IsStatic=*/false, /*IsLet=*/false,
-                                     SourceLoc(),
-                                     ctx.getIdentifier("__dso_handle"),
-                                     type, Files[0]);
-  handleVar->setImplicit(true);
-  handleVar->getAttrs().add(
-    new (ctx) SILGenNameAttr("__dso_handle", /*Implicit=*/true));
-  handleVar->setAccessibility(Accessibility::Internal);
-  DSOHandle = handleVar;
-  return handleVar;
 }
 
 #define FORWARD(name, args) \
@@ -487,8 +431,9 @@ void Module::lookupMember(SmallVectorImpl<ValueDecl*> &results,
       return VD->getModuleContext() == this;
     });
 
-    alreadyInPrivateContext =
-      (nominal->getFormalAccess() == Accessibility::Private);
+    auto AS = nominal->getFormalAccessScope();
+    if (AS.isPrivate() || AS.isFileScope())
+      alreadyInPrivateContext = true;
 
     break;
   }
@@ -504,14 +449,14 @@ void Module::lookupMember(SmallVectorImpl<ValueDecl*> &results,
   } else if (privateDiscriminator.empty()) {
     auto newEnd = std::remove_if(results.begin()+oldSize, results.end(),
                                  [](const ValueDecl *VD) -> bool {
-      return VD->getFormalAccess() <= Accessibility::Private;
+      return VD->getFormalAccess() <= Accessibility::FilePrivate;
     });
     results.erase(newEnd, results.end());
 
   } else {
     auto newEnd = std::remove_if(results.begin()+oldSize, results.end(),
                                  [=](const ValueDecl *VD) -> bool {
-      if (VD->getFormalAccess() > Accessibility::Private)
+      if (VD->getFormalAccess() > Accessibility::FilePrivate)
         return true;
       auto enclosingFile =
         cast<FileUnit>(VD->getDeclContext()->getModuleScopeContext());
@@ -538,58 +483,6 @@ void BuiltinUnit::lookupObjCMethods(
        ObjCSelector selector,
        SmallVectorImpl<AbstractFunctionDecl *> &results) const {
   // No @objc methods in the Builtin module.
-}
-
-DerivedFileUnit::DerivedFileUnit(Module &M)
-    : FileUnit(FileUnitKind::Derived, M) {
-  M.getASTContext().addDestructorCleanup(*this);
-}
-
-void DerivedFileUnit::lookupValue(Module::AccessPathTy accessPath,
-                                  DeclName name,
-                                  NLKind lookupKind,
-                                  SmallVectorImpl<ValueDecl*> &result) const {
-  // If this import is specific to some named type or decl ("import Swift.int")
-  // then filter out any lookups that don't match.
-  if (!Module::matchesAccessPath(accessPath, name))
-    return;
-  
-  for (auto D : DerivedDecls) {
-    if (D->getFullName().matchesRef(name))
-      result.push_back(D);
-  }
-}
-
-void DerivedFileUnit::lookupVisibleDecls(Module::AccessPathTy accessPath,
-                                         VisibleDeclConsumer &consumer,
-                                         NLKind lookupKind) const {
-  assert(accessPath.size() <= 1 && "can only refer to top-level decls");
-  
-  Identifier Id;
-  if (!accessPath.empty()) {
-    Id = accessPath.front().first;
-  }
-
-  for (auto D : DerivedDecls) {
-    if (Id.empty() || D->getName() == Id)
-      consumer.foundDecl(D, DeclVisibilityKind::VisibleAtTopLevel);
-  }
-}
-
-void DerivedFileUnit::lookupObjCMethods(
-       ObjCSelector selector,
-       SmallVectorImpl<AbstractFunctionDecl *> &results) const {
-  for (auto D : DerivedDecls) {
-    if (auto func = dyn_cast<AbstractFunctionDecl>(D)) {
-      if (func->isObjC() && func->getObjCSelector() == selector)
-        results.push_back(func);
-    }
-  }
-}
-
-void DerivedFileUnit::getTopLevelDecls(SmallVectorImpl<swift::Decl *> &results)
-const {
-  results.append(DerivedDecls.begin(), DerivedDecls.end());
 }
 
 void SourceFile::lookupValue(Module::AccessPathTy accessPath, DeclName name,
@@ -670,9 +563,8 @@ TypeBase::gatherAllSubstitutions(Module *module,
   // don't have access to the module. It will have to go away once we're
   // properly differentiating bound generic types based on the protocol
   // conformances visible from a given module.
-  if (!module) {
+  if (!module)
     module = getAnyNominal()->getParentModule();
-  }
 
   // Check the context, introducing the default if needed.
   if (!gpContext)
@@ -681,14 +573,13 @@ TypeBase::gatherAllSubstitutions(Module *module,
   assert(gpContext->getAsNominalTypeOrNominalTypeExtensionContext()
          == getAnyNominal() && "not a valid context");
 
-  auto *genericParams = gpContext->getGenericParamsOfContext();
-  if (!genericParams)
+  auto *genericSig = gpContext->getGenericSignatureOfContext();
+  if (genericSig == nullptr)
     return { };
 
   // If we already have a cached copy of the substitutions, return them.
-  auto *canon = getCanonicalType().getPointer();
-  const ASTContext &ctx = canon->getASTContext();
-  if (auto known = ctx.getSubstitutions(canon, gpContext))
+  const ASTContext &ctx = getASTContext();
+  if (auto known = ctx.getSubstitutions(this, gpContext))
     return *known;
 
   // Compute the set of substitutions.
@@ -696,30 +587,26 @@ TypeBase::gatherAllSubstitutions(Module *module,
 
   // The type itself contains substitutions up to the innermost
   // non-type context.
-  CanType parent(canon);
-  auto *parentDC = gpContext;
+  Type parent = this;
+  ArrayRef<GenericTypeParamType *> genericParams =
+    genericSig->getGenericParams();
+  unsigned lastGenericIndex = genericParams.size();
   while (parent) {
-    if (auto boundGeneric = dyn_cast<BoundGenericType>(parent)) {
-      auto genericParams = parentDC->getGenericParamsOfContext();
-      unsigned index = 0;
-
-      assert(boundGeneric->getGenericArgs().size() ==
-             genericParams->getParams().size());
-
+    if (auto boundGeneric = parent->getAs<BoundGenericType>()) {
+      unsigned index = lastGenericIndex - boundGeneric->getGenericArgs().size();
       for (Type arg : boundGeneric->getGenericArgs()) {
-        auto gp = genericParams->getParams()[index++];
-        auto archetype = gp->getArchetype();
-        substitutions[archetype] = arg;
+        auto paramTy = genericParams[index++];
+        substitutions[
+          paramTy->getCanonicalType()->castTo<GenericTypeParamType>()] = arg;
       }
+      lastGenericIndex -= boundGeneric->getGenericArgs().size();
 
-      parent = CanType(boundGeneric->getParent());
-      parentDC = parentDC->getParent();
+      parent = boundGeneric->getParent();
       continue;
     }
 
-    if (auto nominal = dyn_cast<NominalType>(parent)) {
-      parent = CanType(nominal->getParent());
-      parentDC = parentDC->getParent();
+    if (auto nominal = parent->getAs<NominalType>()) {
+      parent = nominal->getParent();
       continue;
     }
 
@@ -728,76 +615,55 @@ TypeBase::gatherAllSubstitutions(Module *module,
 
   // Add forwarding substitutions from the outer context if we have
   // a type nested inside a generic function.
-  if (auto *outerGenericParams = parentDC->getGenericParamsOfContext()) {
-    for (auto archetype : outerGenericParams->getAllNestedArchetypes())
-      substitutions[archetype] = archetype;
+  auto *parentDC = gpContext;
+  while (parentDC->isTypeContext())
+    parentDC = parentDC->getParent();
+  if (auto *outerEnv = parentDC->getGenericEnvironmentOfContext()) {
+    for (auto gp : outerEnv->getGenericParams()) {
+      auto result = substitutions.insert(
+                      {gp->getCanonicalType()->castTo<GenericTypeParamType>(),
+                       outerEnv->mapTypeIntoContext(gp)});
+      assert(result.second);
+    }
   }
 
-  // Collect all of the archetypes.
-  SmallVector<ArchetypeType *, 2> allArchetypesList;
-  ArrayRef<ArchetypeType *> allArchetypes = genericParams->getAllArchetypes();
-  if (genericParams->getOuterParameters()) {
-    SmallVector<const GenericParamList *, 2> allGenericParams;
-    unsigned numArchetypes = 0;
-    for (; genericParams; genericParams = genericParams->getOuterParameters()) {
-      allGenericParams.push_back(genericParams);
-      numArchetypes += genericParams->getAllArchetypes().size();
-    }
-    allArchetypesList.reserve(numArchetypes);
-    for (auto gp = allGenericParams.rbegin(), gpEnd = allGenericParams.rend();
-         gp != gpEnd; ++gp) {
-      allArchetypesList.append((*gp)->getAllArchetypes().begin(),
-                               (*gp)->getAllArchetypes().end());
-    }
-    allArchetypes = allArchetypesList;
-  }
+  auto lookupConformanceFn =
+      [&](CanType original, Type replacement, ProtocolType *protoType)
+          -> ProtocolConformanceRef {
 
-  // For each of the archetypes, compute the substitution.
-  bool hasTypeVariables = canon->hasTypeVariable();
-  SmallVector<Substitution, 4> resultSubstitutions;
-  resultSubstitutions.resize(allArchetypes.size());
-  unsigned index = 0;
-  for (auto archetype : allArchetypes) {
-    // Substitute into the type.
-    SubstOptions options;
-    if (hasTypeVariables)
-      options |= SubstFlags::IgnoreMissing;
-    auto type = Type(archetype).subst(module, substitutions, options);
-    if (!type)
-      type = ErrorType::get(module->getASTContext());
+    auto *proto = protoType->getDecl();
 
-    SmallVector<ProtocolConformanceRef, 4> conformances;
-    for (auto proto : archetype->getConformsTo()) {
-      // If the type is a type variable or is dependent, just fill in empty
-      // conformances.
-      if (type->is<TypeVariableType>() || type->isTypeParameter()) {
-        conformances.push_back(ProtocolConformanceRef(proto));
+    // If the type is a type variable or is dependent, just fill in empty
+    // conformances.
+    if (replacement->isTypeVariableOrMember() ||
+        replacement->isTypeParameter())
+      return ProtocolConformanceRef(proto);
 
-      // Otherwise, find the conformances.
-      } else {
-        if (auto conforms = module->lookupConformance(type, proto, resolver))
-          conformances.push_back(*conforms);
-        else
-          conformances.push_back(ProtocolConformanceRef(proto));
-      }
-    }
+    // Otherwise, find the conformance.
+    auto conforms = module->lookupConformance(replacement, proto, resolver);
+    if (conforms)
+      return *conforms;
 
-    // Record this substitution.
-    resultSubstitutions[index] = {type, ctx.AllocateCopy(conformances)};
-    ++index;
-  }
+    // FIXME: Should we ever end up here?
+    return ProtocolConformanceRef(proto);
+  };
+
+  SmallVector<Substitution, 4> result;
+  genericSig->getSubstitutions(*module, substitutions,
+                               lookupConformanceFn,
+                               result);
 
   // Before recording substitutions, make sure we didn't end up doing it
   // recursively.
-  if (auto known = ctx.getSubstitutions(canon, gpContext))
+  if (auto known = ctx.getSubstitutions(this, gpContext))
     return *known;
 
   // Copy and record the substitutions.
-  auto permanentSubs = ctx.AllocateCopy(resultSubstitutions,
-                                        hasTypeVariables
+  auto permanentSubs = ctx.AllocateCopy(result,
+                                        hasTypeVariable()
                                           ? AllocationArena::ConstraintSolver
                                           : AllocationArena::Permanent);
-  ctx.setSubstitutions(canon, gpContext, permanentSubs);
+  ctx.setSubstitutions(this, gpContext, permanentSubs);
   return permanentSubs;
 }
 
@@ -807,8 +673,25 @@ Module::lookupConformance(Type type, ProtocolDecl *protocol,
   ASTContext &ctx = getASTContext();
 
   // An archetype conforms to a protocol if the protocol is listed in the
-  // archetype's list of conformances.
+  // archetype's list of conformances, or if the archetype has a superclass
+  // constraint and the superclass conforms to the protocol.
   if (auto archetype = type->getAs<ArchetypeType>()) {
+
+    // The archetype builder drops conformance requirements that are made
+    // redundant by a superclass requirement, so check for a concrete
+    // conformance first, since an abstract conformance might not be
+    // able to be resolved by a substitution that makes the archetype
+    // concrete.
+    if (auto super = archetype->getSuperclass()) {
+      if (auto inheritedConformance = lookupConformance(super, protocol,
+                                                        resolver)) {
+        return ProtocolConformanceRef(
+                 ctx.getInheritedConformance(
+                   type,
+                   inheritedConformance->getConcrete()));
+      }
+    }
+
     if (protocol->isSpecificProtocol(KnownProtocolKind::AnyObject)) {
       if (archetype->requiresClass())
         return ProtocolConformanceRef(protocol);
@@ -821,8 +704,7 @@ Module::lookupConformance(Type type, ProtocolDecl *protocol,
         return ProtocolConformanceRef(protocol);
     }
 
-    if (!archetype->getSuperclass())
-      return None;
+    return None;
   }
 
   // An existential conforms to a protocol if the protocol is listed in the
@@ -866,19 +748,9 @@ Module::lookupConformance(Type type, ProtocolDecl *protocol,
     return None;
   }
 
-  // Check for protocol conformance of archetype via superclass requirement.
-  if (auto archetype = type->getAs<ArchetypeType>()) {
-    if (auto super = archetype->getSuperclass()) {
-      if (auto inheritedConformance = lookupConformance(super, protocol,
-                                                        resolver)) {
-        return ProtocolConformanceRef(
-                 ctx.getInheritedConformance(
-                   type,
-                   inheritedConformance->getConcrete()));
-      }
-
-      return None;
-    }
+  // Type variables have trivial conformances.
+  if (type->isTypeVariableOrMember()) {
+    return ProtocolConformanceRef(protocol);
   }
 
   // UnresolvedType is a placeholder for an unknown type used when generating
@@ -889,8 +761,7 @@ Module::lookupConformance(Type type, ProtocolDecl *protocol,
              ctx.getConformance(type, protocol, protocol->getLoc(), this,
                                 ProtocolConformanceState::Complete));
   }
-  
-  
+
   auto nominal = type->getAnyNominal();
 
   // If we don't have a nominal type, there are no conformances.
@@ -946,7 +817,7 @@ Module::lookupConformance(Type type, ProtocolDecl *protocol,
                                                         explicitConformanceDC);
       
       for (auto sub : substitutions) {
-        if (sub.getReplacement()->is<ErrorType>())
+        if (sub.getReplacement()->hasError())
           return None;
       }
 
@@ -966,30 +837,44 @@ namespace {
   using OperatorMap = SourceFile::OperatorMap<T>;
 
   template <typename T>
-  struct OperatorKind {
+  struct OperatorLookup {
     static_assert(static_cast<T*>(nullptr), "Only usable with operators");
   };
 
   template <>
-  struct OperatorKind<PrefixOperatorDecl> {
-    static const auto value = DeclKind::PrefixOperator;
+  struct OperatorLookup<PrefixOperatorDecl> {
+    template <typename T>
+    static PrefixOperatorDecl *lookup(T &container, Identifier name) {
+      return cast_or_null<PrefixOperatorDecl>(
+               container.lookupOperator(name, DeclKind::PrefixOperator));
+    }
   };
 
   template <>
-  struct OperatorKind<InfixOperatorDecl> {
-    static const auto value = DeclKind::InfixOperator;
+  struct OperatorLookup<InfixOperatorDecl> {
+    template <typename T>
+    static InfixOperatorDecl *lookup(T &container, Identifier name) {
+      return cast_or_null<InfixOperatorDecl>(
+               container.lookupOperator(name, DeclKind::InfixOperator));
+    }
   };
 
   template <>
-  struct OperatorKind<PostfixOperatorDecl> {
-    static const auto value = DeclKind::PostfixOperator;
+  struct OperatorLookup<PostfixOperatorDecl> {
+    template <typename T>
+    static PostfixOperatorDecl *lookup(T &container, Identifier name) {
+      return cast_or_null<PostfixOperatorDecl>(
+               container.lookupOperator(name, DeclKind::PostfixOperator));
+    }
   };
-}
 
-template <typename Op, typename T>
-static Op *lookupOperator(T &container, Identifier name) {
-  return cast_or_null<Op>(container.lookupOperator(name,
-                                                   OperatorKind<Op>::value));
+  template <>
+  struct OperatorLookup<PrecedenceGroupDecl> {
+    template <typename T>
+    static PrecedenceGroupDecl *lookup(T &container, Identifier name) {
+      return container.lookupPrecedenceGroup(name);
+    }
+  };
 }
 
 /// A helper class to sneak around C++ access control rules.
@@ -1008,6 +893,50 @@ static Optional<OP_DECL *>
 lookupOperatorDeclForName(Module *M, SourceLoc Loc, Identifier Name,
                           OperatorMap<OP_DECL *> SourceFile::*OP_MAP);
 
+template<typename OP_DECL>
+using ImportedOperatorsMap = llvm::SmallDenseMap<OP_DECL*, bool, 16>;
+
+template<typename OP_DECL>
+static typename ImportedOperatorsMap<OP_DECL>::iterator
+checkOperatorConflicts(const SourceFile &SF, SourceLoc loc,
+                       ImportedOperatorsMap<OP_DECL> &importedOperators) {
+  // Check for conflicts.
+  auto i = importedOperators.begin(), end = importedOperators.end();
+  auto start = i;
+  for (++i; i != end; ++i) {
+    if (i->first->conflictsWith(start->first)) {
+      if (loc.isValid()) {
+        ASTContext &C = SF.getASTContext();
+        C.Diags.diagnose(loc, diag::ambiguous_operator_decls);
+        C.Diags.diagnose(start->first->getLoc(),
+                         diag::found_this_operator_decl);
+        C.Diags.diagnose(i->first->getLoc(), diag::found_this_operator_decl);
+      }
+      return end;
+    }
+  }
+  return start;
+}
+
+template<>
+typename ImportedOperatorsMap<PrecedenceGroupDecl>::iterator
+checkOperatorConflicts(const SourceFile &SF, SourceLoc loc,
+               ImportedOperatorsMap<PrecedenceGroupDecl> &importedGroups) {
+  if (importedGroups.size() == 1)
+    return importedGroups.begin();
+
+  // Any sort of ambiguity is an error.
+  if (loc.isValid()) {
+    ASTContext &C = SF.getASTContext();
+    C.Diags.diagnose(loc, diag::ambiguous_precedence_groups);
+    for (auto &entry : importedGroups) {
+      C.Diags.diagnose(entry.first->getLoc(),
+                       diag::found_this_precedence_group);
+    }
+  }
+  return importedGroups.end();
+}
+
 // Returns None on error, Optional(nullptr) if no operator decl found, or
 // Optional(decl) if decl was found.
 template<typename OP_DECL>
@@ -1025,7 +954,7 @@ lookupOperatorDeclForName(const FileUnit &File, SourceLoc Loc, Identifier Name,
     break;
   case FileUnitKind::SerializedAST:
   case FileUnitKind::ClangModule:
-    return lookupOperator<OP_DECL>(cast<LoadedFile>(File), Name);
+    return OperatorLookup<OP_DECL>::lookup(cast<LoadedFile>(File), Name);
   }
 
   auto &SF = cast<SourceFile>(File);
@@ -1040,8 +969,13 @@ lookupOperatorDeclForName(const FileUnit &File, SourceLoc Loc, Identifier Name,
   // Record whether they come from re-exported modules.
   // FIXME: We ought to prefer operators elsewhere in this module before we
   // check imports.
-  llvm::SmallDenseMap<OP_DECL*, bool, 16> importedOperators;
+  auto ownModule = SF.getParentModule();
+  ImportedOperatorsMap<OP_DECL> importedOperators;
   for (auto &imported : SourceFile::Impl::getImportsForSourceFile(SF)) {
+    // Protect against source files that contrive to import their own modules.
+    if (imported.first.second == ownModule)
+      continue;
+
     bool isExported =
         imported.second.contains(SourceFile::ImportFlags::Exported);
     if (!includePrivate && !isExported)
@@ -1059,21 +993,9 @@ lookupOperatorDeclForName(const FileUnit &File, SourceLoc Loc, Identifier Name,
   typename OperatorMap<OP_DECL *>::mapped_type result = { nullptr, true };
   
   if (!importedOperators.empty()) {
-    // Check for conflicts.
-    auto i = importedOperators.begin(), end = importedOperators.end();
-    auto start = i;
-    for (++i; i != end; ++i) {
-      if (i->first->conflictsWith(start->first)) {
-        if (Loc.isValid()) {
-          ASTContext &C = SF.getASTContext();
-          C.Diags.diagnose(Loc, diag::ambiguous_operator_decls);
-          C.Diags.diagnose(start->first->getLoc(),
-                           diag::found_this_operator_decl);
-          C.Diags.diagnose(i->first->getLoc(), diag::found_this_operator_decl);
-        }
-        return None;
-      }
-    }
+    auto start = checkOperatorConflicts(SF, Loc, importedOperators);
+    if (start == importedOperators.end())
+      return None;
     result = { start->first, start->second };
   }
 
@@ -1112,17 +1034,16 @@ lookupOperatorDeclForName(Module *M, SourceLoc Loc, Identifier Name,
 }
 
 #define LOOKUP_OPERATOR(Kind) \
-Kind##OperatorDecl * \
-Module::lookup##Kind##Operator(Identifier name, SourceLoc loc) { \
+Kind##Decl * \
+Module::lookup##Kind(Identifier name, SourceLoc loc) { \
   auto result = lookupOperatorDeclForName(this, loc, name, \
-                                          &SourceFile::Kind##Operators); \
+                                          &SourceFile::Kind##s); \
   return result ? *result : nullptr; \
 } \
-Kind##OperatorDecl * \
-SourceFile::lookup##Kind##Operator(Identifier name, bool isCascading, \
-                                   SourceLoc loc) { \
+Kind##Decl * \
+SourceFile::lookup##Kind(Identifier name, bool isCascading, SourceLoc loc) { \
   auto result = lookupOperatorDeclForName(*this, loc, name, true, \
-                                          &SourceFile::Kind##Operators); \
+                                          &SourceFile::Kind##s); \
   if (!result.hasValue()) \
     return nullptr; \
   if (ReferencedNames) {\
@@ -1133,14 +1054,15 @@ SourceFile::lookup##Kind##Operator(Identifier name, bool isCascading, \
   } \
   if (!result.getValue()) { \
     result = lookupOperatorDeclForName(getParentModule(), loc, name, \
-                                       &SourceFile::Kind##Operators); \
+                                       &SourceFile::Kind##s); \
   } \
   return result.hasValue() ? result.getValue() : nullptr; \
 }
 
-LOOKUP_OPERATOR(Prefix)
-LOOKUP_OPERATOR(Infix)
-LOOKUP_OPERATOR(Postfix)
+LOOKUP_OPERATOR(PrefixOperator)
+LOOKUP_OPERATOR(InfixOperator)
+LOOKUP_OPERATOR(PostfixOperator)
+LOOKUP_OPERATOR(PrecedenceGroup)
 #undef LOOKUP_OPERATOR
 
 void Module::getImportedModules(SmallVectorImpl<ImportedModule> &modules,
@@ -1203,8 +1125,6 @@ StringRef Module::getModuleFilename() const {
       Result = LF->getFilename();
       continue;
     }
-    if (isa<DerivedFileUnit>(F))
-      continue;
     return StringRef();
   }
   return Result;
@@ -1575,6 +1495,11 @@ StringRef SourceFile::getFilename() const {
     return "";
   SourceManager &SM = getASTContext().SourceMgr;
   return SM.getIdentifierForBuffer(BufferID);
+}
+
+ASTScope &SourceFile::getScope() {
+  if (!Scope) Scope = ASTScope::createRoot(this);
+  return *Scope;
 }
 
 Identifier

@@ -1,4 +1,4 @@
-// RUN: %target-build-swift -parse %s -Xfrontend -verify
+// RUN: %target-build-swift -typecheck %s -Xfrontend -verify
 // RUN: %target-build-swift -emit-ir -g %s -DNO_ERROR > /dev/null
 // REQUIRES: executable_test
 
@@ -8,6 +8,8 @@
 import OpenGL.GL3
 _ = glGetString
 _ = OpenGL.glGetString
+_ = GL_COLOR_BUFFER_BIT
+_ = OpenGL.GL_COLOR_BUFFER_BIT
 
 import AppKit.NSPanGestureRecognizer
 

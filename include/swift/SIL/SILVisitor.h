@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -31,7 +31,15 @@ class SILVisitor {
 public:
   ImplClass &asImpl() { return static_cast<ImplClass &>(*this); }
 
+  // Perform any required pre-processing before visiting.
+  // Sub-classes can override it to provide their custom
+  // pre-processing steps.
+  void beforeVisit(ValueBase *V) {
+  }
+
   ValueRetTy visit(ValueBase *V) {
+    asImpl().beforeVisit(V);
+
     switch (V->getKind()) {
 #define VALUE(CLASS, PARENT)                                \
   case ValueKind::CLASS:                                    \
@@ -60,8 +68,7 @@ public:
   }
 
   void visitBasicBlockArguments(SILBasicBlock *BB) {
-    for (auto argI = BB->bbarg_begin(), argEnd = BB->bbarg_end();
-         argI != argEnd;
+    for (auto argI = BB->args_begin(), argEnd = BB->args_end(); argI != argEnd;
          ++argI)
       asImpl().visit(*argI);
   }

@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -17,7 +17,9 @@
 #ifndef SWIFT_CLANG_IMPORTER_IMPL_H
 #define SWIFT_CLANG_IMPORTER_IMPL_H
 
+#include "ClangAdapter.h"
 #include "ImportEnumInfo.h"
+#include "ImportName.h"
 #include "SwiftLookupTable.h"
 #include "swift/ClangImporter/ClangImporter.h"
 #include "swift/ClangImporter/ClangModule.h"
@@ -164,10 +166,12 @@ enum class ImportTypeKind {
   /// considered CF-audited.
   Property,
 
-  /// \brief Import the type of an ObjC property accessor.
+  /// \brief Import the type of an ObjC property accessor marked 'weak',
+  /// 'assign', or 'unsafe_unretained'.
   ///
-  /// This behaves exactly like Property except that it accepts Void.
-  PropertyAccessor,
+  /// Like Property, but doesn't allow bridging to a value type, since that
+  /// would discard the ownership.
+  PropertyWithReferenceSemantics,
 
   /// \brief Import the underlying type of an enum.
   ///
@@ -226,32 +230,36 @@ enum class FactoryAsInitKind {
   AsInitializer
 };
 
+namespace importer {
+struct PlatformAvailability {
+  /// A predicate that indicates if the given platform should be
+  /// considered for availability.
+  std::function<bool(StringRef PlatformName)> filter;
+
+  /// A predicate that indicates if the given platform version should
+  /// should be included in the cutoff of deprecated APIs marked unavailable.
+  std::function<bool(unsigned major, llvm::Optional<unsigned> minor)>
+      deprecatedAsUnavailableFilter;
+
+  /// The message to embed for implicitly unavailability if a deprecated
+  /// API is now unavailable.
+  std::string deprecatedAsUnavailableMessage;
+
+  PlatformAvailability(LangOptions &opts);
+
+private:
+  PlatformAvailability(const PlatformAvailability&) = delete;
+  PlatformAvailability &operator=(const PlatformAvailability &) = delete;
+};
+}
+
+using LookupTableMap = llvm::StringMap<std::unique_ptr<SwiftLookupTable>>;
+
 /// \brief Implementation of the Clang importer.
 class LLVM_LIBRARY_VISIBILITY ClangImporter::Implementation 
   : public LazyMemberLoader
 {
   friend class ClangImporter;
-
-  class SwiftNameLookupExtension : public clang::ModuleFileExtension {
-    Implementation &Impl;
-
-  public:
-    SwiftNameLookupExtension(Implementation &impl) : Impl(impl) { }
-
-    clang::ModuleFileExtensionMetadata getExtensionMetadata() const override;
-    llvm::hash_code hashExtension(llvm::hash_code code) const override;
-
-    std::unique_ptr<clang::ModuleFileExtensionWriter>
-    createExtensionWriter(clang::ASTWriter &writer) override;
-
-    std::unique_ptr<clang::ModuleFileExtensionReader>
-    createExtensionReader(const clang::ModuleFileExtensionMetadata &metadata,
-                          clang::ASTReader &reader,
-                          clang::serialization::ModuleFile &mod,
-                          const llvm::BitstreamCursor &stream) override;
-
-  };
-  friend class SwiftNameLookupExtension;
 
 public:
   Implementation(ASTContext &ctx, const ClangImporterOptions &opts);
@@ -263,7 +271,6 @@ public:
   const bool ImportForwardDeclarations;
   const bool InferImportAsMember;
   const bool DisableSwiftBridgeAttr;
-  const bool HonorSwiftNewtypeAttr;
 
   constexpr static const char * const moduleImportBufferName =
     "<swift-imported-modules>";
@@ -279,7 +286,7 @@ private:
   /// Annoyingly, we list this table early so that it gets torn down after
   /// the underlying Clang instances that reference it
   /// (through the Swift name lookup module file extension).
-  llvm::StringMap<std::unique_ptr<SwiftLookupTable>> LookupTables;
+  LookupTableMap LookupTables;
 
   /// \brief A count of the number of load module operations.
   /// FIXME: Horrible, horrible hack for \c loadModule().
@@ -331,42 +338,15 @@ public:
   llvm::SmallDenseMap<const clang::TypedefNameDecl *, MappedTypeNameKind, 16>
     SpecialTypedefNames;
 
-  /// A mapping from module names to the prefixes placed on global names
-  /// in that module, e.g., the Foundation module uses the "NS" prefix.
-  llvm::StringMap<std::string> ModulePrefixes;
-
   /// \brief Provide a single extension point for any given type per clang
   /// submodule
   llvm::DenseMap<std::pair<NominalTypeDecl *, const clang::Module *>,
                  ExtensionDecl *> extensionPoints;
 
-  /// Is the given identifier a reserved name in Swift?
-  static bool isSwiftReservedName(StringRef name);
-
-  /// Translation API nullability from an API note into an optional kind.
-  static OptionalTypeKind translateNullability(clang::NullabilityKind kind);
-
-  /// Determine whether the given class has designated initializers,
-  /// consulting 
-  bool hasDesignatedInitializers(const clang::ObjCInterfaceDecl *classDecl);
-
-  /// Determine whether the given method is a designated initializer
-  /// of the given class.
-  bool isDesignatedInitializer(const clang::ObjCInterfaceDecl *classDecl,
-                               const clang::ObjCMethodDecl *method);
-
-  /// Determine whether the given method is a required initializer
-  /// of the given class.
-  bool isRequiredInitializer(const clang::ObjCMethodDecl *method);
-
-  /// Determine whether the given class method should be imported as
-  /// an initializer.
-  FactoryAsInitKind getFactoryAsInit(const clang::ObjCInterfaceDecl *classDecl,
-                                     const clang::ObjCMethodDecl *method);
-
   /// \brief Typedefs that we should not be importing.  We should be importing
   /// underlying decls instead.
   llvm::DenseSet<const clang::Decl *> SuperfluousTypedefs;
+
   /// Tag decls whose typedefs were imported instead.
   ///
   /// \sa SuperfluousTypedefs
@@ -386,44 +366,15 @@ public:
                  SmallVector<std::pair<clang::MacroInfo *, ValueDecl *>, 2>>
     ImportedMacros;
 
+  // Mapping from macro to value for macros that expand to constant values.
+  llvm::DenseMap<const clang::MacroInfo *, std::pair<clang::APValue, Type>>
+    ImportedMacroConstants;
+
   /// Keeps track of active selector-based lookups, so that we don't infinitely
   /// recurse when checking whether a method with a given selector has already
   /// been imported.
   llvm::DenseMap<std::pair<ObjCSelector, char>, unsigned>
     ActiveSelectors;
-
-  /// Whether we should suppress the import of the given Clang declaration.
-  static bool shouldSuppressDeclImport(const clang::Decl *decl);
-
-  /// Whether we should suppress importing the Objective-C generic type params
-  /// of this class as Swift generic type params.
-  static bool shouldSuppressGenericParamsImport(
-      const clang::ObjCInterfaceDecl *decl);
-
-  /// \brief Check if the declaration is one of the specially handled
-  /// accessibility APIs.
-  ///
-  /// These appear as both properties and methods in ObjC and should be
-  /// imported as methods into Swift.
-  static bool isAccessibilityDecl(const clang::Decl *objCMethodOrProp);
-
-  /// Determine whether this method is an Objective-C "init" method
-  /// that will be imported as a Swift initializer.
-  bool isInitMethod(const clang::ObjCMethodDecl *method);
-
-  /// Determine whether this Objective-C method should be imported as
-  /// an initializer.
-  ///
-  /// \param prefixLength Will be set to the length of the prefix that
-  /// should be stripped from the first selector piece, e.g., "init"
-  /// or the restated name of the class in a factory method.
-  ///
-  ///  \param kind Will be set to the kind of initializer being
-  ///  imported. Note that this does not distinguish designated
-  ///  vs. convenience; both will be classified as "designated".
-  bool shouldImportAsInitializer(const clang::ObjCMethodDecl *method,
-                                 unsigned &prefixLength,
-                                 CtorInitializerKind &kind);
 
 private:
   /// \brief Generation number that is used for crude versioning.
@@ -431,47 +382,10 @@ private:
   /// This value is incremented every time a new module is imported.
   unsigned Generation = 1;
 
-  /// \brief A cached set of extensions for a particular Objective-C class.
-  struct CachedExtensions {
-    CachedExtensions()
-      : Extensions(nullptr), Generation(0) { }
-
-    CachedExtensions(const CachedExtensions &) = delete;
-    CachedExtensions &operator=(const CachedExtensions &) = delete;
-
-    CachedExtensions(CachedExtensions &&other)
-      : Extensions(other.Extensions), Generation(other.Generation)
-    {
-      other.Extensions = nullptr;
-      other.Generation = 0;
-    }
-
-    CachedExtensions &operator=(CachedExtensions &&other) {
-      delete Extensions;
-      Extensions = other.Extensions;
-      Generation = other.Generation;
-      other.Extensions = nullptr;
-      other.Generation = 0;
-      return *this;
-    }
-
-    ~CachedExtensions() { delete Extensions; }
-
-    /// \brief The cached extensions.
-    SmallVector<ExtensionDecl *, 4> *Extensions;
-
-    /// \brief Generation number used to tell when this cache has gone stale.
-    unsigned Generation;
-  };
-
   void bumpGeneration() {
     ++Generation;
     SwiftContext.bumpGeneration();
   }
-
-  /// \brief Cache enum infos, referenced with a dotted Clang name
-  /// "ModuleName.EnumName".
-  llvm::StringMap<importer::EnumInfo> enumInfos;
 
 public:
   /// \brief Keep track of subscript declarations based on getter/setter
@@ -482,62 +396,16 @@ public:
   /// properties.
   llvm::DenseMap<const clang::FunctionDecl *, VarDecl *> FunctionsAsProperties;
 
-  /// Retrieve the key to use when looking for enum information.
-  StringRef getEnumInfoKey(const clang::EnumDecl *decl,
-                           SmallVectorImpl<char> &scratch) {
-    StringRef moduleName;
-    if (auto moduleOpt = getClangSubmoduleForDecl(decl)) {
-      if (*moduleOpt)
-        moduleName = (*moduleOpt)->getTopLevelModuleName();
-    }
-    if (moduleName.empty())
-      moduleName = decl->getASTContext().getLangOpts().CurrentModule;
-
-    StringRef enumName =
-      decl->getDeclName() ? decl->getName()
-                          : decl->getTypedefNameForAnonDecl()->getName();
-
-    if (moduleName.empty()) return enumName;
-
-    scratch.append(moduleName.begin(), moduleName.end());
-    scratch.push_back('.');
-    scratch.append(enumName.begin(), enumName.end());
-    return StringRef(scratch.data(), scratch.size());
+  importer::EnumInfo getEnumInfo(const clang::EnumDecl *decl) {
+    return getNameImporter().getEnumInfo(decl);
+  }
+  importer::EnumKind getEnumKind(const clang::EnumDecl *decl) {
+    return getNameImporter().getEnumKind(decl);
   }
 
-  importer::EnumInfo getEnumInfo(const clang::EnumDecl *decl,
-                                 clang::Preprocessor *ppOverride = nullptr) {
-    // Due to the semaOverride present in importFullName(), we might be using a
-    // decl from a different context.
-    auto &preprocessor = ppOverride ? *ppOverride : getClangPreprocessor();
-
-    // If there is no name for linkage, the computation is trivial and we
-    // wouldn't be able to perform name-based caching anyway.
-    if (!decl->hasNameForLinkage())
-      return importer::EnumInfo(SwiftContext, decl, preprocessor);
-
-    SmallString<32> keyScratch;
-    auto key = getEnumInfoKey(decl, keyScratch);
-    auto known = enumInfos.find(key);
-    if (known != enumInfos.end())
-      return known->second;
-
-    importer::EnumInfo enumInfo(SwiftContext, decl, preprocessor);
-    enumInfos[key] = enumInfo;
-    return enumInfo;
-  }
-  importer::EnumKind getEnumKind(const clang::EnumDecl *decl,
-                                 clang::Preprocessor *ppOverride = nullptr) {
-    return getEnumInfo(decl, ppOverride).getKind();
-  }
-
-  /// \brief the prefix to be stripped from the names of the enum constants
-  /// within the given enum.
-  StringRef
-  getEnumConstantNamePrefix(const clang::EnumDecl *decl,
-                            clang::Preprocessor *ppOverride = nullptr) {
-    return getEnumInfo(decl, ppOverride).getConstantNamePrefix();
-  }
+  // TODO: drop this accessor as soon as we further de-couple the swift name
+  // lookup tables from the Impl.
+  LookupTableMap &getLookupTables() { return LookupTables; }
 
 private:
   class EnumConstantDenseMapInfo {
@@ -663,19 +531,18 @@ private:
   };
 
 public:
-  /// A predicate that indicates if the given platform should be
-  /// considered for availability.
-  std::function<bool (StringRef PlatformName)>
-    PlatformAvailabilityFilter;
+  importer::PlatformAvailability platformAvailability;
 
-  /// A predicate that indicates if the given platform version should
-  /// should be included in the cutoff of deprecated APIs marked unavailable.
-  std::function<bool (unsigned major, llvm::Optional<unsigned> minor)>
-    DeprecatedAsUnavailableFilter;
+private:
+  /// For importing names. This is initialized by the ClangImporter::create()
+  /// after having set up a suitable Clang instance.
+  std::unique_ptr<importer::NameImporter> nameImporter = nullptr;
 
-  /// The message to embed for implicitly unavailability if a deprecated
-  /// API is now unavailable.
-  std::string DeprecatedAsUnavailableMessage;
+public:
+  importer::NameImporter &getNameImporter() {
+    assert(nameImporter && "haven't finished initialization");
+    return *nameImporter;
+  }
 
   /// Tracks top level decls from the bridging header.
   std::vector<clang::Decl *> BridgeHeaderTopLevelDecls;
@@ -689,21 +556,6 @@ public:
 
   void addBridgeHeaderTopLevelDecls(clang::Decl *D);
   bool shouldIgnoreBridgeHeaderTopLevelDecl(clang::Decl *D);
-
-  /// Add the given named declaration as an entry to the given Swift name
-  /// lookup table, including any of its child entries.
-  void addEntryToLookupTable(clang::Sema &clangSema, SwiftLookupTable &table,
-                             clang::NamedDecl *named);
-
-  /// Add the macros from the given Clang preprocessor to the given
-  /// Swift name lookup table.
-  void addMacrosToLookupTable(clang::ASTContext &clangCtx,
-                              clang::Preprocessor &pp, SwiftLookupTable &table);
-
-  /// Finalize a lookup table, handling any as-yet-unresolved entries
-  /// and emitting diagnostics if necessary.
-  void finalizeLookupTable(clang::ASTContext &clangCtx,
-                           clang::Preprocessor &pp, SwiftLookupTable &table);
 
 public:
   void registerExternalDecl(Decl *D) {
@@ -738,24 +590,6 @@ public:
                     bool trackParsedSymbols,
                     std::unique_ptr<llvm::MemoryBuffer> contents);
 
-  /// Returns the redeclaration of \p D that contains its definition for any
-  /// tag type decl (struct, enum, or union) or Objective-C class or protocol.
-  ///
-  /// Returns \c None if \p D is not a redeclarable type declaration.
-  /// Returns null if \p D is a redeclarable type, but it does not have a
-  /// definition yet.
-  Optional<const clang::Decl *>
-  getDefinitionForClangTypeDecl(const clang::Decl *D);
-
-  /// Returns the module \p D comes from, or \c None if \p D does not have
-  /// a valid associated module.
-  ///
-  /// The returned module may be null (but not \c None) if \p D comes from
-  /// an imported header.
-  Optional<clang::Module *>
-  getClangSubmoduleForDecl(const clang::Decl *D,
-                           bool allowForwardDeclaration = false);
-
   /// \brief Retrieve the imported module that should contain the given
   /// Clang decl.
   ClangModuleUnit *getClangModuleForDecl(const clang::Decl *D,
@@ -771,154 +605,13 @@ public:
 
   ClangModuleUnit *getClangModuleForMacro(const clang::MacroInfo *MI);
 
-  /// Retrieve the type of an instance of the given Clang declaration context,
-  /// or a null type if the DeclContext does not have a corresponding type.
-  static clang::QualType getClangDeclContextType(const clang::DeclContext *dc);
-
-  /// Determine whether this typedef is a CF type.
-  static bool isCFTypeDecl(const clang::TypedefNameDecl *Decl);
-
-  /// Determine the imported CF type for the given typedef-name, or the empty
-  /// string if this is not an imported CF type name.
-  static StringRef getCFTypeName(const clang::TypedefNameDecl *decl);
-
-  /// Retrieve the type name of a Clang type for the purposes of
-  /// omitting unneeded words.
-  static OmissionTypeName getClangTypeNameForOmission(clang::ASTContext &ctx,
-                                                      clang::QualType type);
-
   /// Whether NSUInteger can be imported as Int in certain contexts. If false,
   /// should always be imported as UInt.
   static bool shouldAllowNSUIntegerAsInt(bool isFromSystemModule,
                                          const clang::NamedDecl *decl);
 
-  /// Omit needless words in a function name.
-  bool omitNeedlessWordsInFunctionName(
-         clang::Sema &clangSema,
-         StringRef &baseName,
-         SmallVectorImpl<StringRef> &argumentNames,
-         ArrayRef<const clang::ParmVarDecl *> params,
-         clang::QualType resultType,
-         const clang::DeclContext *dc,
-         const llvm::SmallBitVector &nonNullArgs,
-         Optional<unsigned> errorParamIndex,
-         bool returnsSelf,
-         bool isInstanceMethod,
-         StringScratchSpace &scratch);
-
   /// \brief Converts the given Swift identifier for Clang.
   clang::DeclarationName exportName(Identifier name);
-
-  /// Information about imported error parameters.
-  struct ImportedErrorInfo {
-    ForeignErrorConvention::Kind Kind;
-    ForeignErrorConvention::IsOwned_t IsOwned;
-
-    /// The index of the error parameter.
-    unsigned ParamIndex;
-
-    /// Whether the parameter is being replaced with "void"
-    /// (vs. removed).
-    bool ReplaceParamWithVoid;
-  };
-
-  /// The kind of accessor that an entity will be imported as.
-  enum class ImportedAccessorKind {
-    None = 0,
-    PropertyGetter,
-    PropertySetter,
-    SubscriptGetter,
-    SubscriptSetter,
-  };
-
-  /// Describes a name that was imported from Clang.
-  struct ImportedName {
-    /// The imported name.
-    DeclName Imported;
-
-    /// Whether this name was explicitly specified via a Clang
-    /// swift_name attribute.
-    bool HasCustomName = false;
-
-    /// Whether this was one of a special class of Objective-C
-    /// initializers for which we drop the variadic argument rather
-    /// than refuse to import the initializer.
-    bool DroppedVariadic = false;
-
-    /// Whether this is a global being imported as a member
-    bool ImportAsMember = false;
-
-    /// What kind of accessor this name refers to, if any.
-    ImportedAccessorKind AccessorKind = ImportedAccessorKind::None;
-
-    /// For an initializer, the kind of initializer to import.
-    CtorInitializerKind InitKind = CtorInitializerKind::Designated;
-
-    /// The context into which this declaration will be imported.
-    ///
-    /// When the context into which the declaration will be imported
-    /// matches a Clang declaration context (the common case), the
-    /// result will be expressed as a declaration context. Otherwise,
-    /// if the Clang type is not itself a declaration context (for
-    /// example, a typedef that comes into Swift as a strong type),
-    /// the type declaration will be provided.
-    EffectiveClangContext EffectiveContext;
-
-    /// For names that map Objective-C error handling conventions into
-    /// throwing Swift methods, describes how the mapping is performed.
-    Optional<ImportedErrorInfo> ErrorInfo;
-
-    /// For a declaration name that makes the declaration into an
-    /// instance member, the index of the "Self" parameter.
-    Optional<unsigned> SelfIndex = None;
-
-    /// Produce just the imported name, for clients that don't care
-    /// about the details.
-    operator DeclName() const { return Imported; }
-
-    /// Whether any name was imported.
-    explicit operator bool() const { return static_cast<bool>(Imported); }
-
-    /// Whether this declaration is a property accessor (getter or setter).
-    bool isPropertyAccessor() const {
-      switch (AccessorKind) {
-      case ImportedAccessorKind::None:
-      case ImportedAccessorKind::SubscriptGetter:
-      case ImportedAccessorKind::SubscriptSetter:
-        return false;
-
-      case ImportedAccessorKind::PropertyGetter:
-      case ImportedAccessorKind::PropertySetter:
-        return true;
-      }
-    }
-
-    /// Whether this declaration is a subscript accessor (getter or setter).
-    bool isSubscriptAccessor() const {
-      switch (AccessorKind) {
-      case ImportedAccessorKind::None:
-      case ImportedAccessorKind::PropertyGetter:
-      case ImportedAccessorKind::PropertySetter:
-        return false;
-
-      case ImportedAccessorKind::SubscriptGetter:
-      case ImportedAccessorKind::SubscriptSetter:
-        return true;
-      }
-    }
-
-  };
-
-  /// Flags that control the import of names in importFullName.
-  enum class ImportNameFlags {
-    /// Suppress the factory-method-as-initializer transformation.
-    SuppressFactoryMethodAsInit = 0x01,
-    /// Produce the Swift 2 name of the given entity.
-    Swift2Name = 0x02,
-  };
-
-  /// Options that control the import of names in importFullName.
-  typedef OptionSet<ImportNameFlags> ImportNameOptions;
 
   /// Imports the full name of the given Clang declaration into Swift.
   ///
@@ -926,23 +619,16 @@ public:
   /// so it should not be used when referencing Clang symbols.
   ///
   /// \param D The Clang declaration whose name should be imported.
-  ImportedName importFullName(const clang::NamedDecl *D,
-                              ImportNameOptions options = None,
-                              clang::Sema *clangSemaOverride = nullptr);
-
-  /// Imports the name of the given Clang macro into Swift.
-  Identifier importMacroName(const clang::IdentifierInfo *clangIdentifier,
-                             const clang::MacroInfo *macro,
-                             clang::ASTContext &clangCtx);
+  importer::ImportedName
+  importFullName(const clang::NamedDecl *D,
+                 importer::ImportNameOptions options = None) {
+    return getNameImporter().importName(D, options);
+  }
 
   /// Print an imported name as a string suitable for the swift_name attribute,
   /// or the 'Rename' field of AvailableAttr.
-  void printSwiftName(ImportedName, bool fullyQualified, llvm::raw_ostream &os);
-
-  /// Retrieve the property type as determined by the given accessor.
-  static clang::QualType
-  getAccessorPropertyType(const clang::FunctionDecl *accessor, bool isSetter,
-                          Optional<unsigned> selfIndex);
+  void printSwiftName(importer::ImportedName, bool fullyQualified,
+                      llvm::raw_ostream &os);
 
   /// \brief Import the given Clang identifier into Swift.
   ///
@@ -977,11 +663,6 @@ public:
   /// \returns The imported declaration, or null if the macro could not be
   /// translated into Swift.
   ValueDecl *importMacro(Identifier name, clang::MacroInfo *macro);
-
-  /// Find the swift_newtype attribute on the given typedef, if present.
-  clang::SwiftNewtypeAttr *getSwiftNewtypeAttr(
-      const clang::TypedefNameDecl *decl,
-      bool useSwift2Name);
 
   /// Map a Clang identifier name to its imported Swift equivalent.
   StringRef getSwiftNameFromClangName(StringRef name);
@@ -1039,6 +720,10 @@ public:
   /// be represented in Swift.
   Decl *importMirroredDecl(const clang::NamedDecl *decl, DeclContext *dc,
                            bool useSwift2Name, ProtocolDecl *proto);
+
+  /// \brief Utility function for building simple generic environments.
+  GenericEnvironment *buildGenericEnvironment(GenericParamList *genericParams,
+                                              DeclContext *dc);
 
   /// \brief Import the given Clang declaration context into Swift.
   ///
@@ -1102,7 +787,10 @@ public:
 
   /// Determine whether the given declaration is considered
   /// 'unavailable' in Swift.
-  bool isUnavailableInSwift(const clang::Decl *decl);
+  bool isUnavailableInSwift(const clang::Decl *decl) {
+    return importer::isUnavailableInSwift(
+        decl, platformAvailability, SwiftContext.LangOpts.EnableObjCInterop);
+  }
 
   /// \brief Add "Unavailable" annotation to the swift declaration.
   void markUnavailable(ValueDecl *decl, StringRef unavailabilityMsg);
@@ -1185,11 +873,8 @@ public:
   /// \brief Retrieve the NSCopying protocol type.
   Type getNSCopyingType();
 
-  /// \brief Retrieve the CFStringRef typealias.
-  Type getCFStringRefType();
-
   /// \brief Determines whether the given type matches an implicit type
-  /// bound of "NSObject", which is used to validate NSDictionary/NSSet.
+  /// bound of "Hashable", which is used to validate NSDictionary/NSSet.
   bool matchesNSObjectBound(Type type);
 
   /// \brief Look up and attempt to import a Clang declaration with
@@ -1234,7 +919,8 @@ public:
   ///
   /// \returns the imported function type, or null if the type cannot be
   /// imported.
-  Type importFunctionType(const clang::FunctionDecl *clangDecl,
+  Type importFunctionType(DeclContext *dc,
+                          const clang::FunctionDecl *clangDecl,
                           clang::QualType resultType,
                           ArrayRef<const clang::ParmVarDecl *> params,
                           bool isVariadic, bool isNoReturn,
@@ -1253,7 +939,8 @@ public:
   ///
   /// \returns the imported function return type, or null if the type cannot be
   /// imported.
-  Type importFunctionReturnType(const clang::FunctionDecl *clangDecl,
+  Type importFunctionReturnType(DeclContext *dc,
+                                const clang::FunctionDecl *clangDecl,
                                 clang::QualType resultType,
                                 bool allowNSUIntegerAsInt);
 
@@ -1269,7 +956,8 @@ public:
   ///
   /// \returns The imported parameter list on success, or null on failure
   ParameterList *
-  importFunctionParameterList(const clang::FunctionDecl *clangDecl,
+  importFunctionParameterList(DeclContext *dc,
+                              const clang::FunctionDecl *clangDecl,
                               ArrayRef<const clang::ParmVarDecl *> params,
                               bool isVariadic, bool allowNSUIntegerAsInt,
                               ArrayRef<Identifier> argNames);
@@ -1279,20 +967,11 @@ public:
 
   /// Attempt to infer a default argument for a parameter with the
   /// given Clang \c type, \c baseName, and optionality.
-  DefaultArgumentKind inferDefaultArgument(clang::Preprocessor &pp,
-                                           clang::QualType type,
-                                           OptionalTypeKind clangOptionality,
-                                           Identifier baseName,
-                                           unsigned numParams,
-                                           StringRef argumentLabel,
-                                           bool isFirstParameter,
-                                           bool isLastParameter);
-
-  /// Retrieve a bit vector containing the non-null argument
-  /// annotations for the given declaration.
-  llvm::SmallBitVector getNonNullArgs(
-                         const clang::Decl *decl,
-                         ArrayRef<const clang::ParmVarDecl *> params);
+  static DefaultArgumentKind
+  inferDefaultArgument(clang::QualType type, OptionalTypeKind clangOptionality,
+                       Identifier baseName, unsigned numParams,
+                       StringRef argumentLabel, bool isFirstParameter,
+                       bool isLastParameter, importer::NameImporter &);
 
   /// \brief Import the type of an Objective-C method.
   ///
@@ -1325,7 +1004,7 @@ public:
                         bool isVariadic, bool isNoReturn,
                         bool isFromSystemModule,
                         ParameterList **bodyParams,
-                        ImportedName importedName,
+                        importer::ImportedName importedName,
                         DeclName &name,
                         Optional<ForeignErrorConvention> &errorConvention,
                         SpecialMethodKind kind);
@@ -1410,17 +1089,17 @@ public:
     SmallVectorImpl<ProtocolConformance *> &Conformances) override;
 
   template <typename DeclTy, typename ...Targs>
-  DeclTy *createDeclWithClangNode(ClangNode ClangN, Targs &&... Args) {
+  DeclTy *createDeclWithClangNode(ClangNode ClangN, Accessibility access,
+                                  Targs &&... Args) {
     assert(ClangN);
     void *DeclPtr = allocateMemoryForDecl<DeclTy>(SwiftContext, sizeof(DeclTy),
                                                   true);
     auto D = ::new (DeclPtr) DeclTy(std::forward<Targs>(Args)...);
     D->setClangNode(ClangN);
     D->setEarlyAttrValidation(true);
-    if (auto VD = dyn_cast<ValueDecl>(D))
-      VD->setAccessibility(Accessibility::Public);
+    D->setAccessibility(access);
     if (auto ASD = dyn_cast<AbstractStorageDecl>(D))
-      ASD->setSetterAccessibility(Accessibility::Public);
+      ASD->setSetterAccessibility(access);
     return D;
   }
 
@@ -1462,28 +1141,55 @@ public:
 
   /// Dump the Swift-specific name lookup tables we generate.
   void dumpSwiftLookupTables();
-
-  /// Whether the given decl is a global Notification
-  static bool isNSNotificationGlobal(const clang::NamedDecl *);
-
-  // If this decl is associated with a swift_newtype (and we're honoring
-  // swift_newtype), return it, otherwise null
-  clang::TypedefNameDecl *findSwiftNewtype(const clang::NamedDecl *decl,
-                                           clang::Sema &clangSema,
-                                           bool useSwift2Name);
-
-  /// Whether the passed type is NSString *
-  static bool isNSString(const clang::Type *);
-  static bool isNSString(clang::QualType);
-
-  /// Whether the given declaration was exported from Swift.
-  ///
-  /// Note that this only checks the immediate declaration being passed.
-  /// For things like methods and properties that are nested in larger types,
-  /// it's the top-level declaration that should be checked.
-  static bool hasNativeSwiftDecl(const clang::Decl *decl);
 };
 
+namespace importer {
+
+/// Add the given named declaration as an entry to the given Swift name
+/// lookup table, including any of its child entries.
+void addEntryToLookupTable(SwiftLookupTable &table, clang::NamedDecl *named,
+                           importer::NameImporter &);
+
+/// Add the macros from the given Clang preprocessor to the given
+/// Swift name lookup table.
+void addMacrosToLookupTable(clang::ASTContext &clangCtx,
+                            clang::Preprocessor &pp, SwiftLookupTable &table,
+                            ASTContext &SwiftContext);
+
+/// Finalize a lookup table, handling any as-yet-unresolved entries
+/// and emitting diagnostics if necessary.
+void finalizeLookupTable(clang::ASTContext &clangCtx, clang::Preprocessor &pp,
+                         SwiftLookupTable &table, ASTContext &SwiftContext);
+
+/// Whether we should suppress the import of the given Clang declaration.
+bool shouldSuppressDeclImport(const clang::Decl *decl);
+
+class SwiftNameLookupExtension : public clang::ModuleFileExtension {
+  LookupTableMap &lookupTables;
+  ASTContext &swiftCtx;
+  const PlatformAvailability &availability;
+  const bool inferImportAsMember;
+
+public:
+  SwiftNameLookupExtension(LookupTableMap &tables, ASTContext &ctx,
+                           const PlatformAvailability &avail, bool inferIAM)
+      : lookupTables(tables), swiftCtx(ctx), availability(avail),
+        inferImportAsMember(inferIAM) {}
+
+  clang::ModuleFileExtensionMetadata getExtensionMetadata() const override;
+  llvm::hash_code hashExtension(llvm::hash_code code) const override;
+
+  std::unique_ptr<clang::ModuleFileExtensionWriter>
+  createExtensionWriter(clang::ASTWriter &writer) override;
+
+  std::unique_ptr<clang::ModuleFileExtensionReader>
+  createExtensionReader(const clang::ModuleFileExtensionMetadata &metadata,
+                        clang::ASTReader &reader,
+                        clang::serialization::ModuleFile &mod,
+                        const llvm::BitstreamCursor &stream) override;
+};
+
+}
 }
 
 #endif

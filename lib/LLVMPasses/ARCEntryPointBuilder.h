@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -270,8 +270,11 @@ private:
     AttrList = AttrList.addAttribute(
         M.getContext(), AttributeSet::FunctionIndex, Attribute::NoUnwind);
     CheckUnowned = M.getOrInsertFunction("swift_checkUnowned", AttrList,
-                                          Type::getVoidTy(M.getContext()),
-                                          ObjectPtrTy, nullptr);
+                                         Type::getVoidTy(M.getContext()),
+                                         ObjectPtrTy, nullptr);
+    if (llvm::Triple(M.getTargetTriple()).isOSBinFormatCOFF())
+      if (auto *F = llvm::dyn_cast<llvm::Function>(CheckUnowned.get()))
+        F->setDLLStorageClass(llvm::GlobalValue::DLLImportStorageClass);
     return CheckUnowned.get();
   }
 

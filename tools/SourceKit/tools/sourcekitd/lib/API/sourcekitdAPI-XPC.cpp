@@ -5,22 +5,22 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
 #include "DictionaryKeys.h"
 #include "sourcekitd/CodeCompletionResultsArray.h"
+#include "sourcekitd/DocStructureArray.h"
 #include "sourcekitd/DocSupportAnnotationArray.h"
 #include "sourcekitd/TokenAnnotationsArray.h"
-#include "sourcekitd/Logging.h"
+#include "sourcekitd/RequestResponsePrinterBase.h"
 #include "SourceKit/Support/UIdent.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include <map>
 #include <vector>
 #include <xpc/xpc.h>
 
@@ -137,60 +137,12 @@ public:
   }
 };
 
-class SKDObjectPrinter : public SKDObjectVisitor<SKDObjectPrinter> {
-  raw_ostream &OS;
-  unsigned Indent;
+class SKDObjectPrinter : public SKDObjectVisitor<SKDObjectPrinter>,
+                         public RequestResponsePrinterBase<SKDObjectPrinter,
+                                                           sourcekitd_object_t> {
 public:
   SKDObjectPrinter(raw_ostream &OS, unsigned Indent = 0)
-    : OS(OS), Indent(Indent) { }
-
-  void visitDictionary(const DictMap &Map) {
-    OS << "{\n";
-    Indent += 2;
-    for (unsigned i = 0, e = Map.size(); i != e; ++i) {
-      auto &Pair = Map[i];
-      OS.indent(Indent);
-      OSColor(OS, DictKeyColor) << Pair.first.getName();
-      OS << ": ";
-      SKDObjectPrinter(OS, Indent).visit(Pair.second);
-      if (i < e-1)
-        OS << ',';
-      OS << '\n';
-    }
-    Indent -= 2;
-    OS.indent(Indent) << '}';
-  }
-
-  void visitArray(ArrayRef<sourcekitd_object_t> Arr) {
-    OS << "[\n";
-    Indent += 2;
-    for (unsigned i = 0, e = Arr.size(); i != e; ++i) {
-      auto Obj = Arr[i];
-      OS.indent(Indent);
-      SKDObjectPrinter(OS, Indent).visit(Obj);
-      if (i < e-1)
-        OS << ',';
-      OS << '\n';
-    }
-    Indent -= 2;
-    OS.indent(Indent) << ']';
-  }
-
-  void visitInt64(int64_t Val) {
-    OS << Val;
-  }
-
-  void visitString(StringRef Str) {
-    OS << '\"';
-    // Avoid raw_ostream's write_escaped, we don't want to escape unicode
-    // characters because it will be invalid JSON.
-    writeEscaped(Str, OS);
-    OS << '\"';
-  }
-
-  void visitUID(StringRef UID) {
-    OSColor(OS, UIDColor) << UID;
-  }
+    : RequestResponsePrinterBase(OS, Indent) { }
 };
 
 } // anonymous namespace.
@@ -417,32 +369,6 @@ sourcekitd::createErrorRequestCancelled() {
 }
 
 //===----------------------------------------------------------------------===//
-// Public API
-//===----------------------------------------------------------------------===//
-
-sourcekitd_uid_t
-sourcekitd_uid_get_from_cstr(const char *string) {
-  return SKDUIDFromUIdent(UIdent(string));
-}
-
-sourcekitd_uid_t
-sourcekitd_uid_get_from_buf(const char *buf, size_t length) {
-  return SKDUIDFromUIdent(UIdent(llvm::StringRef(buf, length)));
-}
-
-size_t
-sourcekitd_uid_get_length(sourcekitd_uid_t uid) {
-  UIdent UID = UIdentFromSKDUID(uid);
-  return UID.getName().size();
-}
-
-const char *
-sourcekitd_uid_get_string_ptr(sourcekitd_uid_t uid) {
-  UIdent UID = UIdentFromSKDUID(uid);
-  return UID.getName().begin();
-}
-
-//===----------------------------------------------------------------------===//
 // Public Request API
 //===----------------------------------------------------------------------===//
 
@@ -558,24 +484,6 @@ sourcekitd_request_uid_create(sourcekitd_uid_t uid) {
   return xpc_uint64_create(uintptr_t(uid));
 }
 
-void
-sourcekitd_request_description_dump(sourcekitd_object_t obj) {
-  // Avoid colors here, we don't properly detect that the debug window inside
-  // Xcode doesn't support colors.
-  llvm::SmallString<128> Desc;
-  llvm::raw_svector_ostream OS(Desc);
-  printRequestObject(obj, OS);
-  llvm::errs() << OS.str() << '\n';
-}
-
-char *
-sourcekitd_request_description_copy(sourcekitd_object_t obj) {
-  llvm::SmallString<128> Desc;
-  llvm::raw_svector_ostream OS(Desc);
-  printRequestObject(obj, OS);
-  return strdup(Desc.c_str());
-}
-
 //===----------------------------------------------------------------------===//
 // Public Response API
 //===----------------------------------------------------------------------===//
@@ -686,9 +594,14 @@ static sourcekitd_variant_type_t XPCVar_get_type(sourcekitd_variant_t var) {
       return SOURCEKITD_VARIANT_TYPE_ARRAY;
     case CustomBufferKind::CodeCompletionResultsArray:
       return SOURCEKITD_VARIANT_TYPE_ARRAY;
+    case CustomBufferKind::DocStructureArray:
+    case CustomBufferKind::InheritedTypesArray:
+    case CustomBufferKind::DocStructureElementArray:
+    case CustomBufferKind::AttributesArray:
+      return SOURCEKITD_VARIANT_TYPE_ARRAY;
     }
   }
-  
+
   llvm::report_fatal_error("sourcekitd object did not resolve to a known type");
 }
 
@@ -820,6 +733,18 @@ static sourcekitd_variant_t variantFromXPCObject(xpc_object_t obj) {
                 (uintptr_t)CUSTOM_BUF_START(obj), 0 }};
     case CustomBufferKind::CodeCompletionResultsArray:
       return {{ (uintptr_t)getVariantFunctionsForCodeCompletionResultsArray(),
+                (uintptr_t)CUSTOM_BUF_START(obj), 0 }};
+    case CustomBufferKind::DocStructureArray:
+      return {{ (uintptr_t)getVariantFunctionsForDocStructureArray(),
+                (uintptr_t)CUSTOM_BUF_START(obj), ~size_t(0) }};
+    case CustomBufferKind::InheritedTypesArray:
+      return {{ (uintptr_t)getVariantFunctionsForInheritedTypesArray(),
+                (uintptr_t)CUSTOM_BUF_START(obj), 0 }};
+    case CustomBufferKind::DocStructureElementArray:
+      return {{ (uintptr_t)getVariantFunctionsForDocStructureElementArray(),
+                (uintptr_t)CUSTOM_BUF_START(obj), 0 }};
+    case CustomBufferKind::AttributesArray:
+      return {{ (uintptr_t)getVariantFunctionsForAttributesArray(),
                 (uintptr_t)CUSTOM_BUF_START(obj), 0 }};
     }
   }

@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -284,24 +284,14 @@ SourceLoc PoundAvailableInfo::getEndLoc() const {
 }
 
 void PoundAvailableInfo::
-getPlatformKeywordRanges(SmallVectorImpl<CharSourceRange> &PlatformRanges) {
+getPlatformKeywordLocs(SmallVectorImpl<SourceLoc> &PlatformLocs) {
   for (unsigned i = 0; i < NumQueries; i++) {
     auto *VersionSpec =
-      dyn_cast<VersionConstraintAvailabilitySpec>(getQueries()[i]);
+      dyn_cast<PlatformVersionConstraintAvailabilitySpec>(getQueries()[i]);
     if (!VersionSpec)
       continue;
     
-    auto Loc = VersionSpec->getPlatformLoc();
-    auto Platform = VersionSpec->getPlatform();
-    switch (Platform) {
-    case PlatformKind::none:
-      break;
-#define AVAILABILITY_PLATFORM(X, PrettyName)                          \
-  case PlatformKind::X:                                               \
-    PlatformRanges.push_back(CharSourceRange(Loc, strlen(#X)));       \
-    break;
-#include "swift/AST/PlatformKinds.def"
-    }
+    PlatformLocs.push_back(VersionSpec->getPlatformLoc());
   }
 }
 
@@ -319,8 +309,13 @@ SourceRange StmtConditionElement::getSourceRange() const {
       Start = IntroducerLoc;
     else
       Start = getPattern()->getStartLoc();
-
-    return SourceRange(Start, getInitializer()->getEndLoc());
+    
+    SourceLoc End = getInitializer()->getEndLoc();
+    if (Start.isValid() && End.isValid()) {
+      return SourceRange(Start, End);
+    } else {
+      return SourceRange();
+    }
   }
 }
 
@@ -331,9 +326,7 @@ SourceLoc StmtConditionElement::getStartLoc() const {
   case StmtConditionElement::CK_Availability:
     return getAvailability()->getStartLoc();
   case StmtConditionElement::CK_PatternBinding:
-    if (IntroducerLoc.isValid())
-      return IntroducerLoc;
-    return getPattern()->getStartLoc();
+    return getSourceRange().Start;
   }
 }
 
@@ -344,7 +337,7 @@ SourceLoc StmtConditionElement::getEndLoc() const {
   case StmtConditionElement::CK_Availability:
     return getAvailability()->getEndLoc();
   case StmtConditionElement::CK_PatternBinding:
-    return getInitializer()->getEndLoc();
+    return getSourceRange().End;
   }
 }
 

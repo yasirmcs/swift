@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -274,7 +274,6 @@ public:
     }
 
     auto einfo = AnyFunctionType::ExtInfo(representation,
-                                          /*noreturn*/ false,
                                           /*throws*/ flags.throws());
 
     // The result type must be materializable.
@@ -343,7 +342,7 @@ public:
     if (!base->isTypeParameter())
       return Type();
     // TODO: look up protocol?
-    return DependentMemberType::get(base, Ctx.getIdentifier(member), Ctx);
+    return DependentMemberType::get(base, Ctx.getIdentifier(member));
   }
 
   Type createUnownedStorageType(Type base) {
@@ -427,8 +426,7 @@ private:
     DeclContext *dc = getNotionalDC();
 
     TypeLoc loc(repr);
-    if (performTypeLocChecking(Ctx, loc, /*SILType*/ false, dc,
-                               /*diagnose*/ false))
+    if (performTypeLocChecking(Ctx, loc, dc, /*diagnose*/ false))
       return Type();
 
     return loc.getType();

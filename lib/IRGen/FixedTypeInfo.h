@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -120,8 +120,13 @@ public:
   /// object.  The stride is the storage size rounded up to the
   /// alignment; its practical use is that, in an array, it is the
   /// offset from the size of one element to the offset of the next.
+  /// The stride is at least one, even for zero-sized types, like the empty
+  /// tuple.
   Size getFixedStride() const {
-    return StorageSize.roundUpToAlignment(getFixedAlignment());
+    Size s = StorageSize.roundUpToAlignment(getFixedAlignment());
+    if (s.isZero())
+      s = Size(1);
+    return s;
   }
   
   /// Returns the fixed number of "extra inhabitants" (that is, bit

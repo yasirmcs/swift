@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -63,7 +63,7 @@ class CodeCompletionStringChunk {
 
 public:
   enum class ChunkKind {
-    /// "internal", "private" or "public".
+    /// "public", "internal", "fileprivate", or "private".
     AccessControlKeyword,
 
     /// such as @"availability".
@@ -128,8 +128,8 @@ public:
     /// editor buffer if the preceding CallParameterName was inserted.
     CallParameterColon,
 
-    /// A equal sign between parameter name and value. Used in decl attribute.
-    DeclAttrParamEqual,
+    /// A colon between parameter name and value. Used in decl attribute.
+    DeclAttrParamColon,
 
     /// Required parameter type.
     CallParameterType,
@@ -197,7 +197,7 @@ public:
            Kind == ChunkKind::CallParameterName ||
            Kind == ChunkKind::CallParameterInternalName ||
            Kind == ChunkKind::CallParameterColon ||
-           Kind == ChunkKind::DeclAttrParamEqual ||
+           Kind == ChunkKind::DeclAttrParamColon ||
            Kind == ChunkKind::DeclAttrParamKeyword ||
            Kind == ChunkKind::CallParameterType ||
            Kind == ChunkKind::CallParameterClosureType ||
@@ -409,6 +409,7 @@ enum class CodeCompletionDeclKind {
   InstanceVar,
   LocalVar,
   GlobalVar,
+  PrecedenceGroup,
 };
 
 enum class CodeCompletionLiteralKind {

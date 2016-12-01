@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -52,6 +52,8 @@
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include "CompilationRecord.h"
+
 #include <memory>
 
 using namespace swift;
@@ -95,6 +97,7 @@ void Driver::parseDriverKind(ArrayRef<const char *> Args) {
   .Case("swift", DriverKind::Interactive)
   .Case("swiftc", DriverKind::Batch)
   .Case("swift-autolink-extract", DriverKind::AutolinkExtract)
+  .Case("swift-format", DriverKind::SwiftFormat)
   .Default(None);
   
   if (Kind.hasValue())
@@ -191,9 +194,24 @@ class Driver::InputInfoMap
 };
 using InputInfoMap = Driver::InputInfoMap;
 
+static bool failedToReadOutOfDateMap(bool ShowIncrementalBuildDecisions,
+                                     StringRef buildRecordPath,
+                                     StringRef reason = "") {
+  if (ShowIncrementalBuildDecisions) {
+    llvm::outs() << "Incremental compilation has been disabled due to "
+                 << "malformed build record file '" << buildRecordPath << "'.";
+    if (!reason.empty()) {
+      llvm::outs() << " " << reason;
+    }
+    llvm::outs() << "\n";
+  }
+  return true;
+}
+
 static bool populateOutOfDateMap(InputInfoMap &map, StringRef argsHashStr,
                                  const InputFileList &inputs,
-                                 StringRef buildRecordPath) {
+                                 StringRef buildRecordPath,
+                                 bool ShowIncrementalBuildDecisions) {
   // Treat a missing file as "no previous build".
   auto buffer = llvm::MemoryBuffer::getFile(buildRecordPath);
   if (!buffer)
@@ -207,11 +225,13 @@ static bool populateOutOfDateMap(InputInfoMap &map, StringRef argsHashStr,
 
   auto I = stream.begin();
   if (I == stream.end() || !I->getRoot())
-    return true;
+    return failedToReadOutOfDateMap(ShowIncrementalBuildDecisions,
+                                    buildRecordPath);
 
   auto *topLevelMap = dyn_cast<yaml::MappingNode>(I->getRoot());
   if (!topLevelMap)
-    return true;
+    return failedToReadOutOfDateMap(ShowIncrementalBuildDecisions,
+                                    buildRecordPath);
   SmallString<64> scratch;
 
   llvm::StringMap<InputInfo> previousInputs;
@@ -257,36 +277,57 @@ static bool populateOutOfDateMap(InputInfoMap &map, StringRef argsHashStr,
 
   // FIXME: LLVM's YAML support does incremental parsing in such a way that
   // for-range loops break.
+  SmallString<64> CompilationRecordSwiftVersion;
   for (auto i = topLevelMap->begin(), e = topLevelMap->end(); i != e; ++i) {
     auto *key = cast<yaml::ScalarNode>(i->getKey());
     StringRef keyStr = key->getValue(scratch);
 
-    if (keyStr == "version") {
+    using compilation_record::TopLevelKey;
+    if (keyStr == compilation_record::getName(TopLevelKey::Version)) {
       auto *value = dyn_cast<yaml::ScalarNode>(i->getValue());
-      if (!value)
-        return true;
-      versionValid =
-          (value->getValue(scratch) == version::getSwiftFullVersion());
+      if (!value) {
+        auto reason = ("Malformed value for key '" + keyStr + "'.")
+          .toStringRef(scratch);
+        return failedToReadOutOfDateMap(ShowIncrementalBuildDecisions,
+                                        buildRecordPath, reason);
+      }
 
-    } else if (keyStr == "options") {
+      // NB: We check against
+      // swift::version::Version::getCurrentLanguageVersion() here because any
+      // -swift-version argument is handled in the argsHashStr check that
+      // follows.
+      CompilationRecordSwiftVersion = value->getValue(scratch);
+      versionValid = (CompilationRecordSwiftVersion
+                      == version::getSwiftFullVersion(
+                        version::Version::getCurrentLanguageVersion()));
+
+    } else if (keyStr == compilation_record::getName(TopLevelKey::Options)) {
       auto *value = dyn_cast<yaml::ScalarNode>(i->getValue());
       if (!value)
         return true;
       optionsMatch = (argsHashStr == value->getValue(scratch));
 
-    } else if (keyStr == "build_time") {
+    } else if (keyStr == compilation_record::getName(TopLevelKey::BuildTime)) {
       auto *value = dyn_cast<yaml::SequenceNode>(i->getValue());
-      if (!value)
-        return true;
+      if (!value) {
+        auto reason = ("Malformed value for key '" + keyStr + "'.")
+          .toStringRef(scratch);
+        return failedToReadOutOfDateMap(ShowIncrementalBuildDecisions,
+                                        buildRecordPath, reason);
+      }
       llvm::sys::TimeValue timeVal;
       if (readTimeValue(i->getValue(), timeVal))
         return true;
       map[nullptr] = { InputInfo::NeedsCascadingBuild, timeVal };
 
-    } else if (keyStr == "inputs") {
+    } else if (keyStr == compilation_record::getName(TopLevelKey::Inputs)) {
       auto *inputMap = dyn_cast<yaml::MappingNode>(i->getValue());
-      if (!inputMap)
-        return true;
+      if (!inputMap) {
+        auto reason = ("Malformed value for key '" + keyStr + "'.")
+          .toStringRef(scratch);
+        return failedToReadOutOfDateMap(ShowIncrementalBuildDecisions,
+                                        buildRecordPath, reason);
+      }
 
       // FIXME: LLVM's YAML support does incremental parsing in such a way that
       // for-range loops break.
@@ -299,13 +340,9 @@ static bool populateOutOfDateMap(InputInfoMap &map, StringRef argsHashStr,
         if (!value)
           return true;
 
+        using compilation_record::getInfoStatusForIdentifier;
         auto previousBuildState =
-            llvm::StringSwitch<Optional<InputInfo::Status>>(value->getRawTag())
-              .Case("", InputInfo::UpToDate)
-              .Case("!dirty", InputInfo::NeedsCascadingBuild)
-              .Case("!private", InputInfo::NeedsNonCascadingBuild)
-              .Default(None);
-
+          getInfoStatusForIdentifier(value->getRawTag());
         if (!previousBuildState)
           return true;
 
@@ -319,8 +356,26 @@ static bool populateOutOfDateMap(InputInfoMap &map, StringRef argsHashStr,
     }
   }
 
-  if (!versionValid || !optionsMatch)
+  if (!versionValid) {
+    if (ShowIncrementalBuildDecisions) {
+      auto v = version::getSwiftFullVersion(
+          version::Version::getCurrentLanguageVersion());
+      llvm::outs() << "Incremental compilation has been disabled, due to a "
+                   << "compiler version mismatch.\n"
+                   << "\tCompiling with: " << v << "\n"
+                   << "\tPreviously compiled with: "
+                   << CompilationRecordSwiftVersion << "\n";
+    }
     return true;
+  }
+
+  if (!optionsMatch) {
+    if (ShowIncrementalBuildDecisions) {
+      llvm::outs() << "Incremental compilation has been disabled, because "
+                   << "different arguments were passed to the compiler.\n";
+    }
+    return true;
+  }
 
   size_t numInputsFromPrevious = 0;
   for (auto &inputPair : inputs) {
@@ -333,9 +388,34 @@ static bool populateOutOfDateMap(InputInfoMap &map, StringRef argsHashStr,
     map[inputPair.second] = iter->getValue();
   }
 
-  // If a file was removed, we've lost its dependency info. Rebuild everything.
-  // FIXME: Can we do better?
-  return numInputsFromPrevious != previousInputs.size();
+  if (numInputsFromPrevious == previousInputs.size()) {
+    return false;
+  } else {
+    // If a file was removed, we've lost its dependency info. Rebuild everything.
+    // FIXME: Can we do better?
+    if (ShowIncrementalBuildDecisions) {
+      llvm::StringSet<> inputArgs;
+      for (auto &inputPair : inputs) {
+        inputArgs.insert(inputPair.second->getValue());
+      }
+
+      SmallVector<StringRef, 8> missingInputs;
+      for (auto &previousInput : previousInputs) {
+        auto previousInputArg = previousInput.getKey();
+        if (inputArgs.find(previousInputArg) == inputArgs.end()) {
+          missingInputs.push_back(previousInputArg);
+        }
+      }
+
+      llvm::outs() << "Incremental compilation has been disabled, because "
+                   << "the following inputs were used in the previous "
+                   << "compilation, but not in the current compilation:\n";
+      for (auto &missing : missingInputs) {
+        llvm::outs() << "\t" << missing << "\n";
+      }
+    }
+    return true;
+  }
 }
 
 std::unique_ptr<Compilation> Driver::buildCompilation(
@@ -361,11 +441,28 @@ std::unique_ptr<Compilation> Driver::buildCompilation(
   bool ShowIncrementalBuildDecisions =
     ArgList->hasArg(options::OPT_driver_show_incremental);
 
-  bool Incremental = ArgList->hasArg(options::OPT_incremental) &&
-    !ArgList->hasArg(options::OPT_whole_module_optimization) &&
-    !ArgList->hasArg(options::OPT_embed_bitcode);
+  bool Incremental = ArgList->hasArg(options::OPT_incremental);
+  if (ArgList->hasArg(options::OPT_whole_module_optimization)) {
+    if (Incremental && ShowIncrementalBuildDecisions) {
+      llvm::outs() << "Incremental compilation has been disabled, because it "
+                   << "is not compatible with whole module optimization.";
+    }
+    Incremental = false;
+  }
+  if (ArgList->hasArg(options::OPT_embed_bitcode)) {
+    if (Incremental && ShowIncrementalBuildDecisions) {
+      llvm::outs() << "Incremental compilation has been disabled, because it "
+                   << "is not currently compatible with embedding LLVM IR "
+                   << "bitcode.";
+    }
+    Incremental = false;
+  }
 
   bool SaveTemps = ArgList->hasArg(options::OPT_save_temps);
+  bool ContinueBuildingAfterErrors =
+    ArgList->hasArg(options::OPT_continue_building_after_errors);
+  bool ShowDriverTimeCompilation =
+    ArgList->hasArg(options::OPT_driver_time_compilation);
 
   std::unique_ptr<DerivedArgList> TranslatedArgList(
     translateInputArgs(*ArgList));
@@ -450,7 +547,8 @@ std::unique_ptr<Compilation> Driver::buildCompilation(
 
       } else {
         if (populateOutOfDateMap(outOfDateMap, ArgsHash, Inputs,
-                                 buildRecordPath)) {
+                                 buildRecordPath,
+                                 ShowIncrementalBuildDecisions)) {
           // FIXME: Distinguish errors from "file removed", which is benign.
         } else {
           rebuildEverything = false;
@@ -500,15 +598,17 @@ std::unique_ptr<Compilation> Driver::buildCompilation(
                                                  NumberOfParallelCommands,
                                                  Incremental,
                                                  DriverSkipExecution,
-                                                 SaveTemps));
+                                                 SaveTemps,
+                                                 ShowDriverTimeCompilation));
 
   buildJobs(Actions, OI, OFM.get(), *TC, *C);
 
   // For updating code we need to go through all the files and pick up changes,
-  // even if they have compiler errors.
-  // Also for getting bulk fixits.
+  // even if they have compiler errors. Also for getting bulk fixits, or for when
+  // users explicitly request to continue building despite errors.
   if (OI.CompilerMode == OutputInfo::Mode::UpdateCode ||
-      OI.ShouldGenerateFixitEdits)
+      OI.ShouldGenerateFixitEdits ||
+      ContinueBuildingAfterErrors)
     C->setContinueBuildingAfterErrors();
 
   if (ShowIncrementalBuildDecisions)
@@ -942,10 +1042,12 @@ void Driver::buildOutputInfo(const ToolChain &TC, const DerivedArgList &Args,
       break;
 
     case options::OPT_parse:
+    case options::OPT_typecheck:
     case options::OPT_dump_parse:
     case options::OPT_dump_ast:
     case options::OPT_print_ast:
     case options::OPT_dump_type_refinement_contexts:
+    case options::OPT_dump_scope_maps:
     case options::OPT_dump_interface_hash:
       OI.CompilerOutputType = types::TY_Nothing;
       break;
@@ -975,6 +1077,8 @@ void Driver::buildOutputInfo(const ToolChain &TC, const DerivedArgList &Args,
       OI.DebugInfoKind = IRGenDebugInfoKind::Normal;
     else if (A->getOption().matches(options::OPT_gline_tables_only))
       OI.DebugInfoKind = IRGenDebugInfoKind::LineTables;
+    else if (A->getOption().matches(options::OPT_gdwarf_types))
+      OI.DebugInfoKind = IRGenDebugInfoKind::DwarfTypes;
     else
       assert(A->getOption().matches(options::OPT_gnone) &&
              "unknown -g<kind> option");
@@ -985,7 +1089,7 @@ void Driver::buildOutputInfo(const ToolChain &TC, const DerivedArgList &Args,
     // top-level output.
     OI.ShouldGenerateModule = true;
     OI.ShouldTreatModuleAsTopLevelOutput = true;
-  } else if ((OI.DebugInfoKind == IRGenDebugInfoKind::Normal &&
+  } else if ((OI.DebugInfoKind > IRGenDebugInfoKind::LineTables &&
               OI.shouldLink()) ||
              Args.hasArg(options::OPT_emit_objc_header,
                          options::OPT_emit_objc_header_path)) {
@@ -1314,7 +1418,8 @@ void Driver::buildActions(const ToolChain &TC,
   if (OI.shouldLink() && !AllLinkerInputs.empty()) {
     auto *LinkAction = new LinkJobAction(AllLinkerInputs, OI.LinkAction);
 
-    if (TC.getTriple().getObjectFormat() == llvm::Triple::ELF) {
+    if (TC.getTriple().getObjectFormat() == llvm::Triple::ELF ||
+        TC.getTriple().isOSCygMing()) {
       // On ELF platforms there's no built in autolinking mechanism, so we
       // pull the info we need from the .o files directly and pass them as an
       // argument input file to the linker.
@@ -1347,7 +1452,7 @@ void Driver::buildActions(const ToolChain &TC,
   } else {
     // The merge module action needs to be first to force the right outputs
     // for the other actions. However, we can't rely on it being the only
-    // action because there may be other actions (e.g. BackenJobActions) that
+    // action because there may be other actions (e.g. BackendJobActions) that
     // are not merge-module inputs but nonetheless should be run.
     if (MergeModuleAction)
       Actions.push_back(MergeModuleAction.release());
@@ -1602,36 +1707,40 @@ handleCompileJobCondition(Job *J, CompileJobAction::InputInfo inputInfo,
     return;
   }
 
-  if (!alwaysRebuildDependents) {
-    // Default all non-newly added files to being rebuilt without cascading.
-    J->setCondition(Job::Condition::RunWithoutCascading);
-  }
-
+  bool hasValidModTime = false;
   llvm::sys::fs::file_status inputStatus;
-  if (llvm::sys::fs::status(input, inputStatus))
-    return;
-
-  J->setInputModTime(inputStatus.getLastModificationTime());
-  if (J->getInputModTime() != inputInfo.previousModTime)
-    return;
+  if (!llvm::sys::fs::status(input, inputStatus)) {
+    J->setInputModTime(inputStatus.getLastModificationTime());
+    hasValidModTime = true;
+  }
 
   Job::Condition condition;
-  switch (inputInfo.status) {
-  case CompileJobAction::InputInfo::UpToDate:
-    if (!llvm::sys::fs::exists(J->getOutput().getPrimaryOutputFilename()))
+  if (hasValidModTime && J->getInputModTime() == inputInfo.previousModTime) {
+    switch (inputInfo.status) {
+    case CompileJobAction::InputInfo::UpToDate:
+      if (llvm::sys::fs::exists(J->getOutput().getPrimaryOutputFilename()))
+        condition = Job::Condition::CheckDependencies;
+      else
+        condition = Job::Condition::RunWithoutCascading;
+      break;
+    case CompileJobAction::InputInfo::NeedsCascadingBuild:
+      condition = Job::Condition::Always;
+      break;
+    case CompileJobAction::InputInfo::NeedsNonCascadingBuild:
       condition = Job::Condition::RunWithoutCascading;
-    else
-      condition = Job::Condition::CheckDependencies;
-    break;
-  case CompileJobAction::InputInfo::NeedsCascadingBuild:
-    condition = Job::Condition::Always;
-    break;
-  case CompileJobAction::InputInfo::NeedsNonCascadingBuild:
-    condition = Job::Condition::RunWithoutCascading;
-    break;
-  case CompileJobAction::InputInfo::NewlyAdded:
-    llvm_unreachable("handled above");
+      break;
+    case CompileJobAction::InputInfo::NewlyAdded:
+      llvm_unreachable("handled above");
+    }
+  } else {
+    if (alwaysRebuildDependents ||
+        inputInfo.status == CompileJobAction::InputInfo::NeedsCascadingBuild) {
+      condition = Job::Condition::Always;
+    } else {
+      condition = Job::Condition::RunWithoutCascading;
+    }
   }
+
   J->setCondition(condition);
 }
 
@@ -1993,7 +2102,8 @@ void Driver::printJobs(const Compilation &C) const {
 }
 
 void Driver::printVersion(const ToolChain &TC, raw_ostream &OS) const {
-  OS << version::getSwiftFullVersion() << '\n';
+  OS << version::getSwiftFullVersion(
+    version::Version::getCurrentLanguageVersion()) << '\n';
   OS << "Target: " << TC.getTriple().str() << '\n';
 }
 
@@ -2007,6 +2117,7 @@ void Driver::printHelp(bool ShowHidden) const {
     break;
   case DriverKind::Batch:
   case DriverKind::AutolinkExtract:
+  case DriverKind::SwiftFormat:
     ExcludedFlagsBitmask |= options::NoBatchOption;
     break;
   }

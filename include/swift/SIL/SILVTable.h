@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -86,6 +86,7 @@ public:
                                [&](Pair &entry) -> bool {
       if (predicate(entry)) {
         entry.second->decrementRefCount();
+        removeFromVTableCache(entry);
         return true;
       }
       return false;
@@ -99,6 +100,9 @@ public:
   /// Print the vtable.
   void print(llvm::raw_ostream &OS, bool Verbose = false) const;
   void dump() const;
+
+private:
+  void removeFromVTableCache(Pair &entry);
 };
 
 } // end swift namespace

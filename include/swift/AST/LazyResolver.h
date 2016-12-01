@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -34,6 +34,7 @@ class ProtocolDecl;
 class Substitution;
 class TypeDecl;
 class ValueDecl;
+class VarDecl;
 
 /// Abstract interface used to lazily resolve aspects of the AST, such as the
 /// types of declarations or protocol conformance structures.
@@ -50,6 +51,11 @@ public:
   /// the given protocol conformance.
   virtual void resolveWitness(const NormalProtocolConformance *conformance,
                               ValueDecl *requirement) = 0;
+
+  /// Resolve an inherited conformance.
+  virtual ProtocolConformance *resolveInheritedConformance(
+                                 const NormalProtocolConformance *conformance,
+                                 ProtocolDecl *inherited) = 0;
 
   /// Resolve a member type.
   ///
@@ -89,6 +95,12 @@ public:
   /// Resolve the inherited protocols of a given protocol.
   virtual void resolveInheritedProtocols(ProtocolDecl *protocol) = 0;
 
+  /// Bind an extension to its extended type.
+  virtual void bindExtension(ExtensionDecl *ext) = 0;
+
+  /// Introduce the accessors for a 'lazy' variable.
+  virtual void introduceLazyVarAccessors(VarDecl *var) = 0;
+
   /// Resolve the type of an extension.
   ///
   /// This can be called to ensure that the members of an extension can be
@@ -126,6 +138,11 @@ public:
     Principal.resolveWitness(conformance, requirement);
   }
 
+  ProtocolConformance *resolveInheritedConformance(
+                         const NormalProtocolConformance *conformance,
+                         ProtocolDecl *inherited) override {
+    return Principal.resolveInheritedConformance(conformance, inherited);
+  }
 
   Type resolveMemberType(DeclContext *dc, Type type, Identifier name) override {
     return Principal.resolveMemberType(dc, type, name);
@@ -154,6 +171,14 @@ public:
 
   void resolveInheritedProtocols(ProtocolDecl *protocol) override {
     Principal.resolveInheritedProtocols(protocol);
+  }
+
+  void bindExtension(ExtensionDecl *ext) override {
+    Principal.bindExtension(ext);
+  }
+
+  void introduceLazyVarAccessors(VarDecl *var) override {
+    Principal.introduceLazyVarAccessors(var);
   }
 
   void resolveExtension(ExtensionDecl *ext) override {

@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -111,6 +111,8 @@ static bool isCompatibleImportKind(ImportKind expected, ImportKind actual) {
   case ImportKind::Func:
     return false;
   }
+
+  llvm_unreachable("Unhandled ImportKind in switch.");
 }
 
 static const char *getImportKindString(ImportKind kind) {
@@ -132,6 +134,8 @@ static const char *getImportKindString(ImportKind kind) {
   case ImportKind::Func:
     return "func";
   }
+
+  llvm_unreachable("Unhandled ImportKind in switch.");
 }
 
 static bool shouldImportSelfImportClang(const ImportDecl *ID,
@@ -227,7 +231,10 @@ void NameBinder::addImport(
                    /*resolver*/nullptr, &SF);
 
     if (decls.empty()) {
-      diagnose(ID, diag::no_decl_in_module)
+      diagnose(ID, diag::decl_does_not_exist_in_module,
+               static_cast<unsigned>(ID->getImportKind()),
+               declPath.front().first,
+               ID->getModulePath().front().first)
         .highlight(SourceRange(declPath.front().second,
                                declPath.back().second));
       return;
@@ -279,6 +286,21 @@ static void insertOperatorDecl(NameBinder &Binder,
   Operators[OpDecl->getName()] = { OpDecl, true };
 }
 
+static void insertPrecedenceGroupDecl(NameBinder &binder, SourceFile &SF,
+                                      PrecedenceGroupDecl *group) {
+  auto previousDecl = SF.PrecedenceGroups.find(group->getName());
+  if (previousDecl != SF.PrecedenceGroups.end()) {
+    binder.diagnose(group->getLoc(), diag::precedence_group_redeclared);
+    binder.diagnose(previousDecl->second.getPointer(),
+                    diag::previous_precedence_group_decl);
+    return;
+  }
+
+  // FIXME: The second argument indicates whether the given precedence
+  // group is visible outside the current file.
+  SF.PrecedenceGroups[group->getName()] = { group, true };  
+}
+
 /// performNameBinding - Once parsing is complete, this walks the AST to
 /// resolve names and do other top-level validation.
 ///
@@ -312,6 +334,8 @@ void swift::performNameBinding(SourceFile &SF, unsigned StartElem) {
       insertOperatorDecl(Binder, SF.PostfixOperators, OD);
     } else if (auto *OD = dyn_cast<InfixOperatorDecl>(D)) {
       insertOperatorDecl(Binder, SF.InfixOperators, OD);
+    } else if (auto *PGD = dyn_cast<PrecedenceGroupDecl>(D)) {
+      insertPrecedenceGroupDecl(Binder, SF, PGD);
     }
   }
 

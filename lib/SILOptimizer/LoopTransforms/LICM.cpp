@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -231,13 +231,6 @@ static bool canHoistInstruction(SILInstruction *Inst, SILLoop *Loop,
   if (isa<AllocationInst>(Inst) || isa<DeallocStackInst>(Inst))
     return false;
 
-  // Can't hoist metatype instruction referring to an opened existential,
-  // because it may break the dominance relationship.
-  if (isa<MetatypeInst>(Inst) &&
-      Inst->getType().getSwiftRValueType()->hasOpenedExistential()) {
-    return false;
-  }
-
   // Can't hoist instructions which may have side effects.
   if (!hasNoSideEffect(Inst, SafeReads))
     return false;
@@ -355,7 +348,7 @@ static bool sinkFixLifetime(SILLoop *Loop, DominanceInfo *DomTree,
   // Sink the fix_lifetime instruction.
   bool Changed = false;
   for (auto *FLI : FixLifetimeInsts)
-    if (DomTree->dominates(FLI->getOperand()->getParentBB(),
+    if (DomTree->dominates(FLI->getOperand()->getParentBlock(),
                            Preheader)) {
       auto Succs = ExitingBB->getSuccessors();
       for (unsigned EdgeIdx = 0; EdgeIdx <  Succs.size(); ++EdgeIdx) {
@@ -457,7 +450,7 @@ bool LoopTreeOptimization::optimize() {
     auto CurrLoopSummary = llvm::make_unique<LoopNestSummary>(CurrentLoop);
     propagateSummaries(CurrLoopSummary);
 
-    // Analyse the current loop for reads that can be hoisted.
+    // Analyze the current loop for reads that can be hoisted.
     ReadSet SafeReads;
     analyzeCurrentLoop(CurrLoopSummary, SafeReads);
 
@@ -482,7 +475,7 @@ void LoopTreeOptimization::analyzeCurrentLoop(
     std::unique_ptr<LoopNestSummary> &CurrSummary, ReadSet &SafeReads) {
   WriteSet &MayWrites = CurrSummary->MayWrites;
   SILLoop *Loop = CurrSummary->Loop;
-  DEBUG(llvm::dbgs() << " Analysing accesses.\n");
+  DEBUG(llvm::dbgs() << " Analyzing accesses.\n");
 
   // Contains function calls in the loop, which only read from memory.
   SmallVector<ApplyInst *, 8> ReadOnlyApplies;

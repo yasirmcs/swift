@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -377,7 +377,7 @@ sourcekitd_variant_dictionary_get_int64(sourcekitd_variant_t dict,
                                         sourcekitd_uid_t key);
 
 /// The underlying \c bool value for the specified key. false if the
-/// the value for the specified key is not a Boolean value or if there is no
+/// value for the specified key is not a Boolean value or if there is no
 /// value for the specified key.
 SOURCEKITD_PUBLIC SOURCEKITD_NONNULL_ALL SOURCEKITD_WARN_RESULT
 bool

@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -116,6 +116,10 @@ struct SILDeclRef {
 
     /// References the generator for a default argument of a function.
     DefaultArgGenerator,
+
+    /// References the initializer expression for a stored property
+    /// of a nominal type.
+    StoredPropertyInitializer,
 
     /// References the ivar initializer for the ClassDecl in loc.
     ///
@@ -230,11 +234,14 @@ struct SILDeclRef {
   
   SILLocation getAsRegularLocation() const;
 
+  enum class ManglingKind {
+    Default,
+    VTableMethod,
+    DynamicThunk,
+  };
+
   /// Produce a mangled form of this constant.
-  ///
-  /// If 'prefix' is non-empty, it will be used in place of the standard '_T'
-  /// prefix.
-  std::string mangle(StringRef prefix = {}) const;
+  std::string mangle(ManglingKind MKind = ManglingKind::Default) const;
 
   /// True if the SILDeclRef references a function.
   bool isFunc() const {
@@ -260,6 +267,11 @@ struct SILDeclRef {
   /// a function.
   bool isDefaultArgGenerator() const {
     return kind == Kind::DefaultArgGenerator;
+  }
+  /// True if the SILDeclRef references the initializer for a stored property
+  /// of a nominal type.
+  bool isStoredPropertyInitializer() const {
+    return kind == Kind::StoredPropertyInitializer;
   }
   
   /// \brief True if the function should be treated as transparent.

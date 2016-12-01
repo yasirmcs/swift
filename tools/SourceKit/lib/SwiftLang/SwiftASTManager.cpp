@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -208,6 +208,10 @@ namespace SourceKit {
 
   EditorDiagConsumer &ASTUnit::getEditorDiagConsumer() const {
     return Impl.CollectDiagConsumer;
+  }
+
+  void ASTUnit::performAsync(std::function<void()> Fn) {
+    Impl.Queue.dispatch(std::move(Fn));
   }
 }
 

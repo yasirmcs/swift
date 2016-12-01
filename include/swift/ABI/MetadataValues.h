@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -170,7 +170,7 @@ public:
   constexpr TypeMetadataRecordFlags(int_type Data) : Data(Data) {}
   
   constexpr TypeMetadataRecordKind getTypeKind() const {
-    return TypeMetadataRecordKind((Data >> TypeKindShift) & TypeKindMask);
+    return TypeMetadataRecordKind((Data & TypeKindMask) >> TypeKindShift);
   }
   constexpr TypeMetadataRecordFlags withTypeKind(
                                         TypeMetadataRecordKind ptk) const {
@@ -199,8 +199,8 @@ public:
                      (Data & ~TypeKindMask) | (int_type(ptk) << TypeKindShift));
   }
   constexpr ProtocolConformanceReferenceKind getConformanceKind() const {
-    return ProtocolConformanceReferenceKind((Data >> ConformanceKindShift)
-                                     & ConformanceKindMask);
+    return ProtocolConformanceReferenceKind((Data & ConformanceKindMask)
+                                     >> ConformanceKindShift);
   }
   constexpr ProtocolConformanceFlags withConformanceKind(
                                   ProtocolConformanceReferenceKind pck) const {
@@ -227,8 +227,8 @@ enum class SpecialProtocol: uint8_t {
   None = 0,
   /// The AnyObject protocol.
   AnyObject = 1,
-  /// The ErrorProtocol protocol.
-  ErrorProtocol = 2,
+  /// The Error protocol.
+  Error = 2,
 };
 
 /// Identifiers for protocol method dispatch strategies.
@@ -520,6 +520,7 @@ class FieldType {
   // some high bits as well.
   enum : int_type {
     Indirect = 1,
+    Weak = 2,
 
     TypeMask = ((uintptr_t)-1) & ~(alignof(void*) - 1),
   };
@@ -537,8 +538,17 @@ public:
                      | (indirect ? Indirect : 0));
   }
 
+  constexpr FieldType withWeak(bool weak) const {
+    return FieldType((Data & ~Weak)
+                     | (weak ? Weak : 0));
+  }
+
   bool isIndirect() const {
     return bool(Data & Indirect);
+  }
+
+  bool isWeak() const {
+    return bool(Data & Weak);
   }
 
   const Metadata *getType() const {

@@ -1,4 +1,4 @@
-// RUN: %target-swift-frontend -sdk %S/Inputs -I %S/Inputs -enable-source-import %s -emit-silgen -emit-verbose-sil | FileCheck %s
+// RUN: %target-swift-frontend -sdk %S/Inputs -I %S/Inputs -enable-source-import %s -emit-silgen -emit-verbose-sil | %FileCheck %s
 
 // REQUIRES: objc_interop
 
@@ -22,7 +22,7 @@ func callFoo(_ x: Foo) {
 
   // Final @objc properties are still accessed directly.
   // CHECK: [[PROP:%.*]] = ref_element_addr {{%.*}} : $Foo, #Foo.prop
-  // CHECK: load [[PROP]] : $*Int
+  // CHECK: load [trivial] [[PROP]] : $*Int
   let prop = x.prop
   // CHECK: [[PROP:%.*]] = ref_element_addr {{%.*}} : $Foo, #Foo.prop
   // CHECK: assign {{%.*}} to [[PROP]] : $*Int

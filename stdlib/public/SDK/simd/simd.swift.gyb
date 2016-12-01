@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 // simd.h overlays for Swift
@@ -43,7 +43,7 @@ one_minus_ulp = { 'Float':'0x1.fffffep-1', 'Double':'0x1.fffffffffffffp-1' }
 @_fixed_layout
 @_alignment(${vecsize})
 public struct ${vectype} :
-    ArrayLiteralConvertible, CustomDebugStringConvertible {
+    ExpressibleByArrayLiteral, CustomDebugStringConvertible {
 
   public var _vector: Builtin.${llvm_vectype}
 
@@ -798,7 +798,7 @@ public func +=(lhs: inout ${mattype}, rhs: ${mattype}) -> Void {
 }
 
 public func -=(lhs: inout ${mattype}, rhs: ${mattype}) -> Void {
-  lhs = lhs - rhs;
+  lhs = lhs - rhs
 }
 
 /// Scalar-Matrix multiplication.

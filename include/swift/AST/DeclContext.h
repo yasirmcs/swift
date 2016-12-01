@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -35,6 +35,7 @@ namespace llvm {
 
 namespace swift {
   class AbstractFunctionDecl;
+  class GenericEnvironment;
   class ASTContext;
   class ASTWalker;
   class CanType;
@@ -270,28 +271,61 @@ public:
   /// Only valid if \c getAsProtocolOrProtocolExtensionContext().
   GenericTypeParamDecl *getProtocolSelf() const;
 
-  /// getDeclaredTypeOfContext - For a type context, retrieves the declared
-  /// type of the context. Returns a null type for non-type contexts.
+  /// \brief Retrieve the generic parameter 'Self' from a protocol or
+  /// protocol extension.
+  ///
+  /// Only valid if \c getAsProtocolOrProtocolExtensionContext().
+  GenericTypeParamType *getProtocolSelfType() const;
+
+  /// Gets the type being declared by this context.
+  ///
+  /// - Generic types returns an unbound generic type.
+  /// - Non-type contexts returns a null type.
   Type getDeclaredTypeOfContext() const;
 
-  /// getDeclaredTypeInContext - For a type context, retrieves the declared
-  /// type of the context as visible from within the context. Returns a null
-  /// type for non-type contexts.
+  /// Gets the type being declared by this context.
+  ///
+  /// - Generic types return a bound generic type using archetypes.
+  /// - Non-type contexts return a null type.
   Type getDeclaredTypeInContext() const;
   
-  /// getDeclaredInterfaceType - For a type context, retrieves the interface
-  /// type of the context as seen from outside the context. Returns a null
-  /// type for non-type contexts.
+  /// Gets the type being declared by this context.
+  ///
+  /// - Generic types return a bound generic type using interface types.
+  /// - Non-type contexts return a null type.
   Type getDeclaredInterfaceType() const;
 
-  /// \brief Retrieve the innermost generic parameters introduced by this
-  /// context or one of its parent contexts, or null if this context is not
-  /// directly dependent on any generic parameters.
+  /// Get the type of `self` in this context.
+  ///
+  /// - Protocol types return the `Self` archetype.
+  /// - Everything else falls back on getDeclaredTypeOfContext().
+  Type getSelfTypeOfContext() const;
+
+  /// Get the type of `self` in this context.
+  ///
+  /// - Protocol types return the `Self` archetype.
+  /// - Everything else falls back on getDeclaredTypeInContext().
+  Type getSelfTypeInContext() const;
+
+  /// Get the type of `self` in this context.
+  ///
+  /// - Protocol types return the `Self` interface type.
+  /// - Everything else falls back on getDeclaredInterfaceType().
+  Type getSelfInterfaceType() const;
+
+  /// \brief Retrieve the innermost generic parameters of this context or any
+  /// of its parents.
+  ///
+  /// FIXME: Remove this
   GenericParamList *getGenericParamsOfContext() const;
 
-  /// \brief Retrieve the interface generic type parameters and requirements
-  /// exposed by this context.
+  /// \brief Retrieve the innermost generic signature of this context or any
+  /// of its parents.
   GenericSignature *getGenericSignatureOfContext() const;
+
+  /// \brief Retrieve the innermost archetypes of this context or any
+  /// of its parents.
+  GenericEnvironment *getGenericEnvironmentOfContext() const;
   
   /// Returns this or the first local parent context, or nullptr if it is not
   /// contained in one.
@@ -364,6 +398,11 @@ public:
   /// Determine whether this declaration context is generic, meaning that it or
   /// any of its parents have generic parameters.
   bool isGenericContext() const;
+
+  /// Determine whether this declaration context is a generic context that has
+  /// been fully type checked, meaning it has a valid GenericSignature and
+  /// GenericEnvironment.
+  bool isValidGenericContext() const;
 
   /// Determine whether the innermost context is generic.
   bool isInnermostContextGeneric() const;
@@ -467,14 +506,7 @@ public:
 
   void dumpContext() const;
   unsigned printContext(llvm::raw_ostream &OS, unsigned indent = 0) const;
-  
-  /// Get the type of `self` in this declaration context, if there is a
-  /// `self`.
-  Type getSelfTypeInContext() const;
-  /// Get the interface type of `self` in this declaration context, if there is
-  /// a `self`.
-  Type getSelfInterfaceType() const;
-  
+
   // Only allow allocation of DeclContext using the allocator in ASTContext.
   void *operator new(size_t Bytes, ASTContext &C,
                      unsigned Alignment = alignof(DeclContext));
@@ -488,16 +520,19 @@ public:
 /// deserialization.
 class SerializedLocalDeclContext : public DeclContext {
 private:
-  const LocalDeclContextKind LocalKind;
+  unsigned LocalKind : 3;
+
+protected:
+  unsigned SpareBits : 29;
 
 public:
   SerializedLocalDeclContext(LocalDeclContextKind LocalKind,
                              DeclContext *Parent)
     : DeclContext(DeclContextKind::SerializedLocal, Parent),
-      LocalKind(LocalKind) {}
+      LocalKind(static_cast<unsigned>(LocalKind)) {}
 
   LocalDeclContextKind getLocalDeclContextKind() const {
-    return LocalKind;
+    return static_cast<LocalDeclContextKind>(LocalKind);
   }
 
   static bool classof(const DeclContext *DC) {
@@ -571,10 +606,6 @@ class IterableDeclContext {
   /// Lazy member loader context data.
   uint64_t LazyLoaderContextData = 0;
 
-  /// Global declarations that were synthesized on this declaration's behalf,
-  /// such as default operator definitions derived for protocol conformances.
-  ArrayRef<Decl*> DerivedGlobalDecls;
-
   template<class A, class B, class C>
   friend struct ::llvm::cast_convert_val;
 
@@ -618,18 +649,6 @@ public:
 
   /// Load all of the members of this context.
   void loadAllMembers() const;
-
-  /// Retrieve global declarations that were synthesized on this
-  /// declaration's behalf.
-  ArrayRef<Decl *> getDerivedGlobalDecls() const {
-    return DerivedGlobalDecls;
-  }
-
-  /// Set global declarations that were synthesized on this
-  /// declaration's behalf.
-  void setDerivedGlobalDecls(MutableArrayRef<Decl*> decls) {
-    DerivedGlobalDecls = decls;
-  }
 
   // Some Decls are IterableDeclContexts, but not all.
   static bool classof(const Decl *D);

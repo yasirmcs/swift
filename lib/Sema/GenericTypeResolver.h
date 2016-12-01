@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -121,6 +121,12 @@ public:
 /// This generic type resolver replaces generic type parameter types with their
 /// corresponding archetypes, eliminating all dependent types in the process.
 class GenericTypeToArchetypeResolver : public GenericTypeResolver {
+  GenericEnvironment *GenericEnv;
+
+public:
+  explicit GenericTypeToArchetypeResolver(GenericEnvironment *env)
+      : GenericEnv(env) { }
+
   virtual Type resolveGenericTypeParamType(GenericTypeParamType *gp);
 
   virtual Type resolveDependentMemberType(Type baseTy,
@@ -147,11 +153,7 @@ class GenericTypeToArchetypeResolver : public GenericTypeResolver {
 ///
 /// FIXME: This is not a long-term solution.
 class PartialGenericTypeToArchetypeResolver : public GenericTypeResolver {
-  TypeChecker &TC;
-
 public:
-  PartialGenericTypeToArchetypeResolver(TypeChecker &tc) : TC(tc) { }
-
   virtual Type resolveGenericTypeParamType(GenericTypeParamType *gp);
 
   virtual Type resolveDependentMemberType(Type baseTy,

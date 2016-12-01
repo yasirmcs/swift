@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -21,7 +21,7 @@ func benchCaptureProp<S : Sequence
 
   var it = s.makeIterator()
   let initial = it.next()!
-  return IteratorSequence(it).reduce(initial, combine: f)
+  return IteratorSequence(it).reduce(initial, f)
 }
 
 public func run_CaptureProp(_ N: Int) {

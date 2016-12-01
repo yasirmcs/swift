@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -38,6 +38,16 @@ enum class DynamicCastFeasibility {
   /// The cast cannot succeed.
   WillFail,
 };
+
+static inline DynamicCastFeasibility
+atWorst(DynamicCastFeasibility feasibility, DynamicCastFeasibility worstCase) {
+  return (feasibility > worstCase ? worstCase : feasibility);
+}
+
+static inline DynamicCastFeasibility
+atBest(DynamicCastFeasibility feasibility, DynamicCastFeasibility bestCase) {
+  return (feasibility < bestCase ? bestCase : feasibility);
+}
 
 /// Classify the feasibility of a dynamic cast.  The source and target
 /// types should be unlowered formal types.
@@ -77,8 +87,8 @@ void emitIndirectConditionalCastWithScalar(
 /// \brief Does the type conform to the _ObjectiveCBridgeable protocol.
 bool isObjectiveCBridgeable(ModuleDecl *M, CanType Ty);
 
-/// \brief Does the type conform to ErrorProtocol.
-bool isErrorProtocol(ModuleDecl *M, CanType Ty);
+/// \brief Does the type conform to Error.
+bool isError(ModuleDecl *M, CanType Ty);
 } // end namespace swift
 
 #endif

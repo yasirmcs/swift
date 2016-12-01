@@ -1,6 +1,6 @@
 // RUN: rm -rf %t && mkdir -p %t
 // RUN: cp %s %t/main.swift
-// RUN: %target-swift-frontend -parse -verify -primary-file %t/main.swift %S/Inputs/enum_equatable_hashable_other.swift
+// RUN: %target-swift-frontend -typecheck -verify -primary-file %t/main.swift %S/Inputs/enum_equatable_hashable_other.swift
 
 enum Foo {
   case A, B
@@ -96,7 +96,8 @@ private enum Bar<T> {
 
   mutating func value() -> T {
     switch self {
-    case E(let x): // expected-error{{invalid pattern}}
+    // FIXME: Should diagnose here that '.' needs to be inserted, but E has an ErrorType at this point
+    case E(let x):
       return x.value
     }
   }

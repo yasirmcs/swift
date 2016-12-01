@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -14,11 +14,14 @@
 // modules.
 //
 //===----------------------------------------------------------------------===//
+#include "ImporterImpl.h"
 #include "SwiftLookupTable.h"
 #include "swift/Basic/STLExtras.h"
 #include "swift/Basic/Version.h"
 #include "clang/AST/DeclObjC.h"
 #include "clang/Lex/MacroInfo.h"
+#include "clang/Lex/Preprocessor.h"
+#include "clang/Sema/Sema.h"
 #include "clang/Serialization/ASTBitCodes.h"
 #include "clang/Serialization/ASTReader.h"
 #include "clang/Serialization/ASTWriter.h"
@@ -31,6 +34,7 @@
 #include "llvm/Support/OnDiskHashTable.h"
 
 using namespace swift;
+using namespace importer;
 using namespace llvm::support;
 
 /// Determine whether the new declarations matches an existing declaration.
@@ -41,6 +45,162 @@ static bool matchesExistingDecl(clang::Decl *decl, clang::Decl *existingDecl) {
   }
 
   return false;
+}
+
+namespace {
+enum class MacroConflictAction {
+  Discard,
+  Replace,
+  AddAsAlternative
+};
+}
+
+/// Based on the Clang module structure, decides what to do when a new
+/// definition of an existing macro is seen: discard it, have it replace the
+/// old one, or add it as an alternative.
+///
+/// Specifically, if the innermost explicit submodule containing \p newMacro
+/// contains the innermost explicit submodule containing \p existingMacro,
+/// \p newMacro should replace \p existingMacro; if they're the same module,
+/// \p existingMacro should stay in place. Otherwise, they don't share an
+/// explicit module, and should be considered alternatives.
+///
+/// Note that the above assumes that macro definitions are processed in reverse
+/// order, i.e. the first definition seen is the last in a translation unit.
+///
+/// If we're not currently building a module, then the "latest" macro wins,
+/// which (by the same assumption) should be the existing macro.
+static MacroConflictAction
+considerReplacingExistingMacro(const clang::MacroInfo *newMacro,
+                               const clang::MacroInfo *existingMacro,
+                               const clang::Preprocessor *PP) {
+  assert(PP);
+  assert(newMacro);
+  assert(existingMacro);
+  assert(newMacro->getOwningModuleID() == 0);
+  assert(existingMacro->getOwningModuleID() == 0);
+
+  if (PP->getLangOpts().CurrentModule.empty())
+    return MacroConflictAction::Discard;
+
+  clang::ModuleMap &moduleInfo = PP->getHeaderSearchInfo().getModuleMap();
+  const clang::SourceManager &sourceMgr = PP->getSourceManager();
+
+  auto findContainingExplicitModule =
+      [&moduleInfo, &sourceMgr](const clang::MacroInfo *macro)
+        -> const clang::Module * {
+
+    clang::SourceLocation definitionLoc = macro->getDefinitionLoc();
+    assert(definitionLoc.isValid() &&
+           "implicitly-defined macros shouldn't show up in a module's lookup");
+    clang::FullSourceLoc fullLoc(definitionLoc, sourceMgr);
+
+    const clang::Module *module = moduleInfo.inferModuleFromLocation(fullLoc);
+    assert(module && "we are building a module; everything should be modular");
+
+    while (module->isSubModule()) {
+      if (module->IsExplicit)
+        break;
+      module = module->Parent;
+    }
+    return module;
+  };
+
+  const clang::Module *newModule = findContainingExplicitModule(newMacro);
+  const clang::Module *existingModule =
+      findContainingExplicitModule(existingMacro);
+
+  if (existingModule == newModule)
+    return MacroConflictAction::Discard;
+  if (existingModule->isSubModuleOf(newModule))
+    return MacroConflictAction::Replace;
+  return MacroConflictAction::AddAsAlternative;
+}
+
+namespace swift {
+/// Module file extension writer for the Swift lookup tables.
+class SwiftLookupTableWriter : public clang::ModuleFileExtensionWriter {
+  clang::ASTWriter &Writer;
+
+  ASTContext &swiftCtx;
+  const PlatformAvailability &availability;
+  const bool inferImportAsMember;
+
+public:
+  SwiftLookupTableWriter(clang::ModuleFileExtension *extension,
+                         clang::ASTWriter &writer, ASTContext &ctx,
+                         const PlatformAvailability &avail, bool inferIAM)
+      : ModuleFileExtensionWriter(extension), Writer(writer), swiftCtx(ctx),
+        availability(avail), inferImportAsMember(inferIAM) {}
+
+  void writeExtensionContents(clang::Sema &sema,
+                              llvm::BitstreamWriter &stream) override;
+
+  void populateTable(SwiftLookupTable &table, NameImporter &);
+};
+
+/// Module file extension reader for the Swift lookup tables.
+class SwiftLookupTableReader : public clang::ModuleFileExtensionReader {
+  clang::ASTReader &Reader;
+  clang::serialization::ModuleFile &ModuleFile;
+  std::function<void()> OnRemove;
+
+  void *SerializedTable;
+  ArrayRef<clang::serialization::DeclID> Categories;
+  void *GlobalsAsMembersTable;
+
+  SwiftLookupTableReader(clang::ModuleFileExtension *extension,
+                         clang::ASTReader &reader,
+                         clang::serialization::ModuleFile &moduleFile,
+                         std::function<void()> onRemove, void *serializedTable,
+                         ArrayRef<clang::serialization::DeclID> categories,
+                         void *globalsAsMembersTable)
+      : ModuleFileExtensionReader(extension), Reader(reader),
+        ModuleFile(moduleFile), OnRemove(onRemove),
+        SerializedTable(serializedTable), Categories(categories),
+        GlobalsAsMembersTable(globalsAsMembersTable) {}
+
+public:
+  /// Create a new lookup table reader for the given AST reader and stream
+  /// position.
+  static std::unique_ptr<SwiftLookupTableReader>
+  create(clang::ModuleFileExtension *extension, clang::ASTReader &reader,
+         clang::serialization::ModuleFile &moduleFile,
+         std::function<void()> onRemove, const llvm::BitstreamCursor &stream);
+
+  ~SwiftLookupTableReader();
+
+  /// Retrieve the AST reader associated with this lookup table reader.
+  clang::ASTReader &getASTReader() const { return Reader; }
+
+  /// Retrieve the module file associated with this lookup table reader.
+  clang::serialization::ModuleFile &getModuleFile() { return ModuleFile; }
+
+  /// Retrieve the set of base names that are stored in the on-disk hash table.
+  SmallVector<StringRef, 4> getBaseNames();
+
+  /// Retrieve the set of entries associated with the given base name.
+  ///
+  /// \returns true if we found anything, false otherwise.
+  bool lookup(StringRef baseName,
+              SmallVectorImpl<SwiftLookupTable::FullTableEntry> &entries);
+
+  /// Retrieve the declaration IDs of the categories.
+  ArrayRef<clang::serialization::DeclID> categories() const {
+    return Categories;
+  }
+
+  /// Retrieve the set of contexts that have globals-as-members
+  /// injected into them.
+  SmallVector<SwiftLookupTable::StoredContext, 4> getGlobalsAsMembersContexts();
+
+  /// Retrieve the set of global declarations that are going to be
+  /// imported as members into the given context.
+  ///
+  /// \returns true if we found anything, false otherwise.
+  bool lookupGlobalsAsMembers(SwiftLookupTable::StoredContext context,
+                              SmallVectorImpl<uintptr_t> &entries);
+};
 }
 
 bool SwiftLookupTable::contextRequiresName(ContextKind kind) {
@@ -54,6 +214,8 @@ bool SwiftLookupTable::contextRequiresName(ContextKind kind) {
   case ContextKind::TranslationUnit:
     return false;
   }
+
+  llvm_unreachable("Invalid ContextKind.");
 }
 
 /// Try to translate the given Clang declaration into a context.
@@ -133,6 +295,8 @@ SwiftLookupTable::translateContext(EffectiveClangContext context) {
 
     return None;
   }
+
+  llvm_unreachable("Invalid EffectiveClangContext.");
 }
 
 /// Lookup an unresolved context name and resolve it to a Clang
@@ -145,7 +309,6 @@ clang::NamedDecl *SwiftLookupTable::resolveContext(StringRef unresolvedName) {
     if (auto decl = entry.dyn_cast<clang::NamedDecl *>()) {
       if (isa<clang::TagDecl>(decl) ||
           isa<clang::ObjCInterfaceDecl>(decl) ||
-          isa<clang::ObjCProtocolDecl>(decl) ||
           isa<clang::TypedefNameDecl>(decl))
         return decl;
     }
@@ -262,7 +425,8 @@ static bool isGlobalAsMember(SwiftLookupTable::SingleEntry entry,
 }
 
 bool SwiftLookupTable::addLocalEntry(SingleEntry newEntry,
-                                     SmallVectorImpl<uintptr_t> &entries) {
+                                     SmallVectorImpl<uintptr_t> &entries,
+                                     const clang::Preprocessor *PP) {
   // Check whether this entry matches any existing entry.
   auto decl = newEntry.dyn_cast<clang::NamedDecl *>();
   auto macro = newEntry.dyn_cast<clang::MacroInfo *>();
@@ -272,10 +436,21 @@ bool SwiftLookupTable::addLocalEntry(SingleEntry newEntry,
         matchesExistingDecl(decl, mapStoredDecl(existingEntry)))
       return false;
 
-    // If it matches an existing macro, overwrite the existing entry.
+    // If it matches an existing macro, decide on the best course of action.
     if (macro && isMacroEntry(existingEntry)) {
-      existingEntry = encodeEntry(macro);
-      return false;
+      MacroConflictAction action =
+         considerReplacingExistingMacro(macro,
+                                        mapStoredMacro(existingEntry),
+                                        PP);
+      switch (action) {
+      case MacroConflictAction::Discard:
+        return false;
+      case MacroConflictAction::Replace:
+        existingEntry = encodeEntry(macro);
+        return false;
+      case MacroConflictAction::AddAsAlternative:
+        break;
+      }
     }
   }
 
@@ -288,7 +463,8 @@ bool SwiftLookupTable::addLocalEntry(SingleEntry newEntry,
 }
 
 void SwiftLookupTable::addEntry(DeclName name, SingleEntry newEntry,
-                                EffectiveClangContext effectiveContext) {
+                                EffectiveClangContext effectiveContext,
+                                const clang::Preprocessor *PP) {
   assert(!Reader && "Cannot modify a lookup table stored on disk");
 
   // Translate the context.
@@ -311,7 +487,7 @@ void SwiftLookupTable::addEntry(DeclName name, SingleEntry newEntry,
   // If this is a global imported as a member, record is as such.
   if (isGlobalAsMember(newEntry, context)) {
     auto &entries = GlobalsAsMembers[context];
-    (void)addLocalEntry(newEntry, entries);
+    (void)addLocalEntry(newEntry, entries, PP);
   }
 
   // Find the list of entries for this base name.
@@ -321,7 +497,7 @@ void SwiftLookupTable::addEntry(DeclName name, SingleEntry newEntry,
   for (auto &entry : entries) {
     if (entry.Context == context) {
       // We have entries for this context.
-      (void)addLocalEntry(newEntry, entry.DeclsOrMacros);
+      (void)addLocalEntry(newEntry, entry.DeclsOrMacros, PP);
       return;
     }
   }
@@ -896,9 +1072,11 @@ namespace {
 void SwiftLookupTableWriter::writeExtensionContents(
        clang::Sema &sema,
        llvm::BitstreamWriter &stream) {
+  NameImporter nameImporter(swiftCtx, availability, sema, inferImportAsMember);
+
   // Populate the lookup table.
   SwiftLookupTable table(nullptr);
-  PopulateTable(sema, table);
+  populateTable(table, nameImporter);
 
   SmallVector<uint64_t, 64> ScratchRecord;
 
@@ -1313,3 +1491,87 @@ bool SwiftLookupTableReader::lookupGlobalsAsMembers(
   entries = std::move(*known);
   return true;
 }
+
+clang::ModuleFileExtensionMetadata
+SwiftNameLookupExtension::getExtensionMetadata() const {
+  clang::ModuleFileExtensionMetadata metadata;
+  metadata.BlockName = "swift.lookup";
+  metadata.MajorVersion = SWIFT_LOOKUP_TABLE_VERSION_MAJOR;
+  metadata.MinorVersion = SWIFT_LOOKUP_TABLE_VERSION_MINOR;
+  metadata.UserInfo =
+      version::getSwiftFullVersion(swiftCtx.LangOpts.EffectiveLanguageVersion);
+  return metadata;
+}
+
+llvm::hash_code
+SwiftNameLookupExtension::hashExtension(llvm::hash_code code) const {
+  return llvm::hash_combine(code, StringRef("swift.lookup"),
+                            SWIFT_LOOKUP_TABLE_VERSION_MAJOR,
+                            SWIFT_LOOKUP_TABLE_VERSION_MINOR,
+                            inferImportAsMember);
+}
+
+void SwiftLookupTableWriter::populateTable(SwiftLookupTable &table,
+                                           NameImporter &nameImporter) {
+  auto &sema = nameImporter.getClangSema();
+  for (auto decl : sema.Context.getTranslationUnitDecl()->noload_decls()) {
+    // Skip anything from an AST file.
+    if (decl->isFromASTFile())
+      continue;
+
+    // Skip non-named declarations.
+    auto named = dyn_cast<clang::NamedDecl>(decl);
+    if (!named)
+      continue;
+
+    // Add this entry to the lookup table.
+    addEntryToLookupTable(table, named, nameImporter);
+  }
+
+  // Add macros to the lookup table.
+  addMacrosToLookupTable(sema.Context, sema.getPreprocessor(), table, swiftCtx);
+
+  // Finalize the lookup table, which may fail.
+  finalizeLookupTable(sema.Context, sema.getPreprocessor(), table, swiftCtx);
+};
+
+std::unique_ptr<clang::ModuleFileExtensionWriter>
+SwiftNameLookupExtension::createExtensionWriter(clang::ASTWriter &writer) {
+  return std::unique_ptr<clang::ModuleFileExtensionWriter>(
+      new SwiftLookupTableWriter(this, writer, swiftCtx, availability,
+                                 inferImportAsMember));
+}
+
+std::unique_ptr<clang::ModuleFileExtensionReader>
+SwiftNameLookupExtension::createExtensionReader(
+    const clang::ModuleFileExtensionMetadata &metadata,
+    clang::ASTReader &reader, clang::serialization::ModuleFile &mod,
+    const llvm::BitstreamCursor &stream) {
+  // Make sure we have a compatible block. Since these values are part
+  // of the hash, it should never be wrong.
+  assert(metadata.BlockName == "swift.lookup");
+  assert(metadata.MajorVersion == SWIFT_LOOKUP_TABLE_VERSION_MAJOR);
+  assert(metadata.MinorVersion == SWIFT_LOOKUP_TABLE_VERSION_MINOR);
+
+  // Check whether we already have an entry in the set of lookup tables.
+  auto &entry = lookupTables[mod.ModuleName];
+  if (entry) return nullptr;
+
+  // Local function used to remove this entry when the reader goes away.
+  std::string moduleName = mod.ModuleName;
+  auto onRemove = [this, moduleName]() {
+    lookupTables.erase(moduleName);
+  };
+
+  // Create the reader.
+  auto tableReader = SwiftLookupTableReader::create(this, reader, mod, onRemove,
+                                                    stream);
+  if (!tableReader) return nullptr;
+
+  // Create the lookup table.
+  entry.reset(new SwiftLookupTable(tableReader.get()));
+
+  // Return the new reader.
+  return std::move(tableReader);
+}
+

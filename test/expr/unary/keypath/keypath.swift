@@ -1,4 +1,4 @@
-// RUN: %target-swift-frontend(mock-sdk: %clang-importer-sdk) -parse -parse-as-library  %s -verify
+// RUN: %target-swift-frontend(mock-sdk: %clang-importer-sdk) -typecheck -parse-as-library  %s -verify
 import ObjectiveC
 import Foundation
 
@@ -6,7 +6,7 @@ import Foundation
 
 @objc class A : NSObject {
   @objc var propB: B = B()
-  @objc var propString: String = ""
+  @objc var propString: String = "" // expected-note {{did you mean 'propString'}}
   @objc var propArray: [String] = []
   @objc var propDict: [String: B] = [:]
   @objc var propSet: Set<String> = []
@@ -31,6 +31,16 @@ import Foundation
 
 class C {
   var nonObjC: String? // expected-note{{add '@objc' to expose this var to Objective-C}}{{3-3=@objc }}
+}
+
+extension NSArray {
+  @objc class Foo : NSObject {
+    @objc var propString: String = ""
+  }
+}
+
+extension Array {
+  typealias Foo = NSArray.Foo
 }
 
 func testKeyPath(a: A, b: B) {
@@ -84,6 +94,10 @@ func testKeyPath(a: A, b: B) {
 
   // Property with keyword name.
   let _: String = #keyPath(A.repeat)
+
+  // Nested type of a bridged type (rdar://problem/28061409).
+  typealias IntArray = [Int]
+  let _: String = #keyPath(IntArray.Foo.propString)
 }
 
 func testAsStaticString() {
@@ -109,4 +123,8 @@ func testParseErrors() {
   let _: String = #keyPath(A(b:c:d:).propSet); // expected-error{{cannot use compound name 'A(b:c:d:)' in '#keyPath' expression}}
   let _: String = #keyPath(A.propString; // expected-error{{expected ')' to complete '#keyPath' expression}}
     // expected-note@-1{{to match this opening '('}}
+}
+
+func testTypoCorrection() {
+  let _: String = #keyPath(A.proString) // expected-error {{type 'A' has no member 'proString'}}
 }

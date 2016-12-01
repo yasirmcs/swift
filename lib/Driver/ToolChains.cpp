@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -28,6 +28,7 @@
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/Option/Arg.h"
 #include "llvm/Option/ArgList.h"
+#include "llvm/ProfileData/InstrProf.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
@@ -132,6 +133,7 @@ static void addCommonFrontendArgs(const ToolChain &TC,
   inputArgs.AddLastArg(arguments, options::OPT_warnings_as_errors);
   inputArgs.AddLastArg(arguments, options::OPT_sanitize_EQ);
   inputArgs.AddLastArg(arguments, options::OPT_sanitize_coverage_EQ);
+  inputArgs.AddLastArg(arguments, options::OPT_swift_version);
 
   // Pass on any build config options
   inputArgs.AddAllArgs(arguments, options::OPT_D);
@@ -634,6 +636,9 @@ ToolChain::constructInvocation(const ModuleWrapJobAction &job,
   assert(context.Output.getPrimaryOutputType() == types::TY_Object &&
          "The -modulewrap mode only produces object files");
 
+  Arguments.push_back("-target");
+  Arguments.push_back(context.Args.MakeArgString(getTriple().str()));
+    
   Arguments.push_back("-o");
   Arguments.push_back(
       context.Args.MakeArgString(context.Output.getPrimaryOutputFilename()));
@@ -947,10 +952,28 @@ toolchains::Darwin::constructInvocation(const LinkJobAction &job,
   assert(context.Output.getPrimaryOutputType() == types::TY_Image &&
          "Invalid linker output type.");
 
+  if (context.Args.hasFlag(options::OPT_static_executable,
+                           options::OPT_no_static_executable,
+                           false)) {
+    llvm::report_fatal_error("-static-executable is not supported on Darwin");
+  }
+
   const Driver &D = getDriver();
   const llvm::Triple &Triple = getTriple();
 
-  InvocationInfo II{"ld"};
+  // Configure the toolchain.
+  // By default, use the system `ld` to link.
+  const char *LD = "ld";
+  if (const Arg *A = context.Args.getLastArg(options::OPT_tools_directory)) {
+    StringRef toolchainPath(A->getValue());
+
+    // If there is a 'ld' in the toolchain folder, use that instead.
+    if (auto toolchainLD = llvm::sys::findProgramByName("ld", {toolchainPath})) {
+      LD = context.Args.MakeArgString(toolchainLD.get());
+    }
+  }
+
+  InvocationInfo II = {LD};
   ArgStringList &Arguments = II.Arguments;
 
   if (context.Args.hasArg(options::OPT_driver_use_filelists) ||
@@ -964,7 +987,7 @@ toolchains::Darwin::constructInvocation(const LinkJobAction &job,
 
   addInputsOfType(Arguments, context.InputActions, types::TY_Object);
 
-  if (context.OI.DebugInfoKind == IRGenDebugInfoKind::Normal) {
+  if (context.OI.DebugInfoKind > IRGenDebugInfoKind::LineTables) {
     size_t argCount = Arguments.size();
     if (context.OI.CompilerMode == OutputInfo::Mode::SingleCompile)
       addInputsOfType(Arguments, context.Inputs, types::TY_SwiftModuleFile);
@@ -996,11 +1019,9 @@ toolchains::Darwin::constructInvocation(const LinkJobAction &job,
   // we wouldn't have to replicate Clang's logic here.
   bool wantsObjCRuntime = false;
   if (Triple.isiOS())
-    wantsObjCRuntime = Triple.isOSVersionLT(8);
-  else if (Triple.isWatchOS())
-    wantsObjCRuntime = Triple.isOSVersionLT(2);
+    wantsObjCRuntime = Triple.isOSVersionLT(9);
   else if (Triple.isMacOSX())
-    wantsObjCRuntime = Triple.isMacOSXVersionLT(10, 10);
+    wantsObjCRuntime = Triple.isMacOSXVersionLT(10, 11);
 
   if (context.Args.hasFlag(options::OPT_link_objc_runtime,
                            options::OPT_no_link_objc_runtime,
@@ -1222,6 +1243,7 @@ std::string toolchains::GenericUnix::getDefaultLinker() const {
   case llvm::Triple::x86_64:
   case llvm::Triple::ppc64:
   case llvm::Triple::ppc64le:
+  case llvm::Triple::systemz:
     // BFD linker has issues wrt relocations against protected symbols.
     return "gold";
   default:
@@ -1270,14 +1292,14 @@ toolchains::GenericUnix::constructInvocation(const LinkJobAction &job,
   case LinkKind::None:
     llvm_unreachable("invalid link kind");
   case LinkKind::Executable:
-    // Default case, nothing extra needed
+    // Default case, nothing extra needed.
     break;
   case LinkKind::DynamicLibrary:
     Arguments.push_back("-shared");
     break;
   }
 
-  // Select the linker to use
+  // Select the linker to use.
   std::string Linker;
   if (const Arg *A = context.Args.getLastArg(options::OPT_use_ld)) {
     Linker = A->getValue();
@@ -1286,6 +1308,22 @@ toolchains::GenericUnix::constructInvocation(const LinkJobAction &job,
   }
   if (!Linker.empty()) {
     Arguments.push_back(context.Args.MakeArgString("-fuse-ld=" + Linker));
+  }
+
+  // Configure the toolchain.
+  // By default, use the system clang++ to link.
+  const char * Clang = "clang++";
+  if (const Arg *A = context.Args.getLastArg(options::OPT_tools_directory)) {
+    StringRef toolchainPath(A->getValue());
+
+    // If there is a clang in the toolchain folder, use that instead.
+    if (auto toolchainClang = llvm::sys::findProgramByName("clang++", {toolchainPath})) {
+      Clang = context.Args.MakeArgString(toolchainClang.get());
+    }
+
+    // Look for binutils in the toolchain folder.
+    Arguments.push_back("-B");
+    Arguments.push_back(context.Args.MakeArgString(A->getValue()));
   }
 
   std::string Target = getTargetForLinker();
@@ -1325,33 +1363,42 @@ toolchains::GenericUnix::constructInvocation(const LinkJobAction &job,
 
   // Link the standard library.
   Arguments.push_back("-L");
-  if (context.Args.hasFlag(options::OPT_static_stdlib,
-                            options::OPT_no_static_stdlib,
-                            false)) {
+  if (context.Args.hasFlag(options::OPT_static_executable,
+                           options::OPT_no_static_executable,
+                           false)) {
     SmallString<128> StaticRuntimeLibPath;
     getRuntimeStaticLibraryPath(StaticRuntimeLibPath, context.Args, *this);
     Arguments.push_back(context.Args.MakeArgString(StaticRuntimeLibPath));
-    // The following libraries are required to build a satisfactory
-    // static program
-    Arguments.push_back("-ldl");
-    Arguments.push_back("-lpthread");
-    Arguments.push_back("-lbsd");
-    Arguments.push_back("-licui18n");
-    Arguments.push_back("-licuuc");
-    // The runtime uses dlopen to look for the protocol conformances.
-    // Therefore, we need to ensure they appear in the dynamic table.
-    // This happens automatically for dynamically-linked programs, but
-    // in this case we have to take additional measures.
-    Arguments.push_back("-Xlinker");
-    Arguments.push_back("-export-dynamic");
-    Arguments.push_back("-Xlinker");
-    Arguments.push_back("--exclude-libs");
-    Arguments.push_back("-Xlinker");
-    Arguments.push_back("ALL");
 
+    SmallString<128> linkFilePath = StaticRuntimeLibPath;
+    llvm::sys::path::append(linkFilePath, "static-executable-args.lnk");
+    auto linkFile = linkFilePath.str();
+
+    if (llvm::sys::fs::is_regular_file(linkFile)) {
+      Arguments.push_back(context.Args.MakeArgString(Twine("@") + linkFile));
+    } else {
+      llvm::report_fatal_error("-static-executable not supported on this platform");
+    }
+  }
+  else if (context.Args.hasFlag(options::OPT_static_stdlib,
+                                options::OPT_no_static_stdlib,
+                                false)) {
+    SmallString<128> StaticRuntimeLibPath;
+    getRuntimeStaticLibraryPath(StaticRuntimeLibPath, context.Args, *this);
+    Arguments.push_back(context.Args.MakeArgString(StaticRuntimeLibPath));
+
+    SmallString<128> linkFilePath = StaticRuntimeLibPath;
+    llvm::sys::path::append(linkFilePath, "static-stdlib-args.lnk");
+    auto linkFile = linkFilePath.str();
+    if (llvm::sys::fs::is_regular_file(linkFile)) {
+      Arguments.push_back(context.Args.MakeArgString(Twine("@") + linkFile));
+    } else {
+      llvm::report_fatal_error(linkFile + " not found");
+    }
   }
   else {
     Arguments.push_back(context.Args.MakeArgString(RuntimeLibPath));
+    Arguments.push_back("-lswiftCore");
   }
 
 
@@ -1368,10 +1415,10 @@ toolchains::GenericUnix::constructInvocation(const LinkJobAction &job,
                               getTriple().getArchName() +
                               ".a");
     Arguments.push_back(context.Args.MakeArgString(LibProfile));
+    Arguments.push_back(context.Args.MakeArgString(
+        Twine("-u", llvm::getInstrProfRuntimeHookVarName())));
   }
 
-  // Always add the stdlib
-  Arguments.push_back("-lswiftCore");
 
   // Add any autolinking scripts to the arguments
   for (const Job *Cmd : context.Inputs) {
@@ -1392,7 +1439,7 @@ toolchains::GenericUnix::constructInvocation(const LinkJobAction &job,
   Arguments.push_back("-o");
   Arguments.push_back(context.Output.getPrimaryOutputFilename().c_str());
 
-  return {"clang++", Arguments};
+  return {Clang, Arguments};
 }
 
 std::string

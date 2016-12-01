@@ -1,12 +1,9 @@
 // RUN: %target-run-stdlib-swift
 // REQUIRES: executable_test
-
 // REQUIRES: objc_interop
 
+// FIXME: Add a feature for "platforms that support XCTest".
 // REQUIRES: OS=macosx
-
-// watchOS 2.0 does not have an XCTest module.
-// XFAIL: OS=watchos
 
 import StdlibUnittest
 
@@ -161,8 +158,8 @@ XCTestTestSuite.test("XCTAssertEqual/Dictionary<T, U>") {
     }
 
     dynamic func test_whenDictionariesAreNotEqual_fails() {
-      XCTAssertEqual(["foo": ["bar": "baz"]],
-                     ["foo": ["bar": "flim"]])
+      XCTAssertEqual(["foo": ["bar": "baz"] as NSDictionary],
+                     ["foo": ["bar": "flim"] as NSDictionary])
     }
   }
 

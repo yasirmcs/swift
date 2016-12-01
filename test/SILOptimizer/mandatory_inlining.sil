@@ -1,4 +1,4 @@
-// RUN: %target-sil-opt -enable-sil-verify-all %s -mandatory-inlining | FileCheck %s
+// RUN: %target-sil-opt -assume-parsing-unqualified-ownership-sil -enable-sil-verify-all %s -mandatory-inlining | %FileCheck %s
 
 import Builtin
 import Swift
@@ -7,14 +7,28 @@ protocol CP : class {
   func f() -> Self
 }
 
+protocol P2 {
+  var c: Int32 { get }
+}
+
+extension P2 {
+  func s() -> Int32
+}
+
+struct L {
+  var start: Int32 { get }
+  @sil_stored let o: P2
+  init(o: P2)
+}
+
 sil @plus : $@convention(thin) (Int64, Int64) -> Int64
 sil @fromLiteral : $@convention(thin) (Builtin.Int128, @thin Int64.Type) -> Int64
 
 // CHECK-LABEL: sil [transparent] @test_add : $@convention(thin) (Int64) -> Int64 {
 sil [transparent] @test_add : $@convention(thin) (Int64) -> Int64 {
 bb0(%0 : $Int64):
-  %1 = alloc_box $Int64
-  %1a = project_box %1 : $@box Int64
+  %1 = alloc_box $@box Int64
+  %1a = project_box %1 : $@box Int64, 0
   store %0 to %1a : $*Int64
   %3 = function_ref @plus : $@convention(thin) (Int64, Int64) -> Int64
   %4 = load %1a : $*Int64
@@ -30,7 +44,7 @@ bb0(%0 : $Int64):
 // CHECK-LABEL: sil @inline_test_add : $@convention(thin) (Int64) -> Int64 {
 sil @inline_test_add : $@convention(thin) (Int64) -> Int64 {
 // CHECK: [[BB0:.*]]([[VAL0:%.*]] : $Int64):
-  // CHECK: [[VAL1:%.*]] = alloc_box $Int64
+  // CHECK: [[VAL1:%.*]] = alloc_box $@box Int64
   // CHECK: [[PB1:%.*]] = project_box [[VAL1]]
   // CHECK: store [[VAL0]] to [[PB1]]
   // CHECK: [[VAL3:%.*]] = function_ref @plus
@@ -41,7 +55,7 @@ sil @inline_test_add : $@convention(thin) (Int64) -> Int64 {
   // CHECK: [[VAL8:%.*]] = integer_literal $Builtin.Int128, 10
   // CHECK: [[VAL9:%.*]] = apply [[VAL6]]([[VAL8]], [[VAL7]])
   // CHECK: [[VAL10:%.*]] = apply [[VAL4]]([[VAL5]], [[VAL9]])
-  // CHECK: [[VAL11:%.*]] = alloc_box $Int64
+  // CHECK: [[VAL11:%.*]] = alloc_box $@box Int64
   // CHECK: [[PB11:%.*]] = project_box [[VAL11]]
   // CHECK: store [[VAL10]] to [[PB11]]
   // CHECK: [[VAL13:%.*]] = function_ref @plus
@@ -61,8 +75,8 @@ sil @inline_test_add : $@convention(thin) (Int64) -> Int64 {
   // CHECK: return [[VAL25]]
 
 bb0(%0 : $Int64):
-  %1 = alloc_box $Int64
-  %1a = project_box %1 : $@box Int64
+  %1 = alloc_box $@box Int64
+  %1a = project_box %1 : $@box Int64, 0
   store %0 to %1a : $*Int64
   %3 = function_ref @plus : $@convention(thin) (Int64, Int64) -> Int64
   %4 = function_ref @test_add : $@convention(thin) (Int64) -> Int64
@@ -86,7 +100,7 @@ bb0(%0 : $Int64):
 // CHECK-LABEL: sil @inline_twice_test_add : $@convention(thin) (Int64) -> Int64 {
 sil @inline_twice_test_add : $@convention(thin) (Int64) -> Int64 {
 // CHECK: [[BB0:.*]]([[VAL0:%.*]] : $Int64):
-  // CHECK: [[VAL1:%.*]] = alloc_box $Int64
+  // CHECK: [[VAL1:%.*]] = alloc_box $@box Int64
   // CHECK: [[PB1:%.*]] = project_box [[VAL1]]
   // CHECK: store [[VAL0]] to [[PB1]]
   // CHECK: [[VAL3:%.*]] = function_ref @plus
@@ -97,7 +111,7 @@ sil @inline_twice_test_add : $@convention(thin) (Int64) -> Int64 {
   // CHECK: [[VAL8:%.*]] = integer_literal $Builtin.Int128, 10
   // CHECK: [[VAL9:%.*]] = apply [[VAL6]]([[VAL8]], [[VAL7]])
   // CHECK: [[VAL10:%.*]] = apply [[VAL4]]([[VAL5]], [[VAL9]])
-  // CHECK: [[VAL11:%.*]] = alloc_box $Int64
+  // CHECK: [[VAL11:%.*]] = alloc_box $@box Int64
   // CHECK: [[PB11:%.*]] = project_box [[VAL11]]
   // CHECK: store [[VAL10]] to [[PB11]]
   // CHECK: [[VAL13:%.*]] = function_ref @plus
@@ -108,7 +122,7 @@ sil @inline_twice_test_add : $@convention(thin) (Int64) -> Int64 {
   // CHECK: [[VAL18:%.*]] = apply [[VAL15]]([[VAL17]], [[VAL16]])
   // CHECK: [[VAL19:%.*]] = apply [[VAL13]]([[VAL14]], [[VAL18]])
   // CHECK: strong_release [[VAL11]]
-  // CHECK: [[VAL21:%.*]] = alloc_box $Int64
+  // CHECK: [[VAL21:%.*]] = alloc_box $@box Int64
   // CHECK: [[PB21:%.*]] = project_box [[VAL21]]
   // CHECK: store [[VAL19]] to [[PB21]]
   // CHECK: [[VAL23:%.*]] = function_ref @plus
@@ -128,8 +142,8 @@ sil @inline_twice_test_add : $@convention(thin) (Int64) -> Int64 {
   // CHECK: return [[VAL35]]
 
 bb0(%0 : $Int64):
-  %1 = alloc_box $Int64
-  %1a = project_box %1 : $@box Int64
+  %1 = alloc_box $@box Int64
+  %1a = project_box %1 : $@box Int64, 0
   store %0 to %1a : $*Int64
   %3 = function_ref @plus : $@convention(thin) (Int64, Int64) -> Int64
   %4 = function_ref @test_add : $@convention(thin) (Int64) -> Int64
@@ -158,8 +172,8 @@ protocol SomeProtocol {
 // CHECK-LABEL: sil [transparent] @test_existential_metatype : $@convention(thin) (@in SomeProtocol) -> @thick SomeProtocol.Type
 sil [transparent] @test_existential_metatype : $@convention(thin) (@in SomeProtocol) -> @thick SomeProtocol.Type {
 bb0(%0 : $*SomeProtocol):
-  %1 = alloc_box $SomeProtocol
-  %1a = project_box %1 : $@box SomeProtocol
+  %1 = alloc_box $@box SomeProtocol
+  %1a = project_box %1 : $@box SomeProtocol, 0
   copy_addr [take] %0 to [initialization] %1a : $*SomeProtocol
   %4 = alloc_stack $SomeProtocol
   copy_addr %1a to [initialization] %4 : $*SomeProtocol
@@ -173,7 +187,7 @@ bb0(%0 : $*SomeProtocol):
 // CHECK-LABEL: sil @inline_test_existential_metatype : $@convention(thin) (@in SomeProtocol) -> @thick SomeProtocol.Type
 sil @inline_test_existential_metatype : $@convention(thin) (@in SomeProtocol) -> @thick SomeProtocol.Type {
 // CHECK: [[BB0:.*]]([[VAL0:%.*]] : $*SomeProtocol):
-  // CHECK: [[VAL1:%.*]] = alloc_box $SomeProtocol
+  // CHECK: [[VAL1:%.*]] = alloc_box $@box SomeProtocol
   // CHECK: [[PB1:%.*]] = project_box [[VAL1]]
   // CHECK: copy_addr [take] %0 to [initialization] [[PB1]]
   // CHECK: [[VAL4:%.*]] = alloc_stack $SomeProtocol
@@ -207,10 +221,10 @@ sil @bar : $@convention(thin) (Float32) -> Bool
 // CHECK-LABEL: sil [transparent] @test_control_flow : $@convention(thin) (Float, Float) -> Float
 sil [transparent] @test_control_flow : $@convention(thin) (Float, Float) -> Float {
 bb0(%0 : $Float, %1 : $Float):
-  %2 = alloc_box $Float
-  %2a = project_box %2 : $@box Float
-  %3 = alloc_box $Float
-  %3a = project_box %3 : $@box Float
+  %2 = alloc_box $@box Float
+  %2a = project_box %2 : $@box Float, 0
+  %3 = alloc_box $@box Float
+  %3a = project_box %3 : $@box Float, 0
   store %0 to %2a : $*Float
   store %1 to %3a : $*Float
   %6 = function_ref @get_logic_value : $@convention(method) (@inout Bool) -> Builtin.Int1
@@ -267,7 +281,7 @@ bb6(%39 : $Float):
 sil @inline_test_control_flow : $@convention(thin) (Float) -> Float {
 
 // CHECK: [[BB0:.*]]([[VAL0:%.*]] : $Float):
-  // CHECK: [[VAL1:%.*]] = alloc_box $Float
+  // CHECK: [[VAL1:%.*]] = alloc_box $@box Float
   // CHECK: [[PB1:%.*]] = project_box [[VAL1]]
   // CHECK: store [[VAL0]] to [[PB1]]
   // CHECK: [[VAL3:%.*]] = function_ref @sub_floats
@@ -282,9 +296,9 @@ sil @inline_test_control_flow : $@convention(thin) (Float) -> Float {
   // CHECK: [[VAL12:%.*]] = metatype $@thin Float.Type
   // CHECK: [[VAL13:%.*]] = float_literal $Builtin.FPIEEE64, 0x4000000000000000
   // CHECK: [[VAL14:%.*]] = apply [[VAL11]]([[VAL13]], [[VAL12]])
-  // CHECK: [[VAL15:%.*]] = alloc_box $Float
+  // CHECK: [[VAL15:%.*]] = alloc_box $@box Float
   // CHECK: [[PB15:%.*]] = project_box [[VAL15]]
-  // CHECK: [[VAL16:%.*]] = alloc_box $Float
+  // CHECK: [[VAL16:%.*]] = alloc_box $@box Float
   // CHECK: [[PB16:%.*]] = project_box [[VAL16]]
   // CHECK: store [[VAL10]] to [[PB15]]
   // CHECK: store [[VAL14]] to [[PB16]]
@@ -347,8 +361,8 @@ sil @inline_test_control_flow : $@convention(thin) (Float) -> Float {
   // CHECK: return [[VAL61]]
 
 bb0(%0 : $Float):
-  %1 = alloc_box $Float
-  %1a = project_box %1 : $@box Float
+  %1 = alloc_box $@box Float
+  %1a = project_box %1 : $@box Float, 0
   store %0 to %1a : $*Float
   %3 = function_ref @sub_floats : $@convention(thin) (Float, Float) -> Float
   %4 = function_ref @test_control_flow : $@convention(thin) (Float, Float) -> Float
@@ -439,10 +453,10 @@ sil @true_getter : $@convention(thin) () -> Bool
 
 sil [transparent] @short_circuit_or : $@convention(thin) (Bool, @callee_owned () -> Bool) -> Bool {
 bb0(%0 : $Bool, %1 : $@callee_owned () -> Bool):
-  %2 = alloc_box $Bool
-  %2a = project_box %2 : $@box Bool
-  %3 = alloc_box $@callee_owned () -> Bool
-  %3a = project_box %3 : $@box @callee_owned () -> Bool
+  %2 = alloc_box $@box Bool
+  %2a = project_box %2 : $@box Bool, 0
+  %3 = alloc_box $@box @callee_owned () -> Bool
+  %3a = project_box %3 : $@box @callee_owned () -> Bool, 0
   store %0 to %2a : $*Bool
   store %1 to %3a : $*@callee_owned () -> Bool
   %6 = function_ref @get_logic_value : $@convention(method) (@inout Bool) -> Builtin.Int1
@@ -469,7 +483,7 @@ bb3(%16 : $Bool):
 
 sil private [transparent] @closure0 : $@convention(thin) (@owned @box Bool) -> Bool {
 bb0(%0 : $@box Bool):
-  %1 = project_box %0 : $@box Bool
+  %1 = project_box %0 : $@box Bool, 0
   %2 = tuple ()
   %3 = load %1 : $*Bool
   strong_release %0 : $@box Bool
@@ -501,10 +515,10 @@ sil @test_short_circuit : $@convention(thin) (Bool, Bool) -> Bool {
   // CHECK: return {{.*}}
 
 bb0(%0 : $Bool, %1 : $Bool):
-  %2 = alloc_box $Bool
-  %2a = project_box %2 : $@box Bool
-  %3 = alloc_box $Bool
-  %3a = project_box %3 : $@box Bool
+  %2 = alloc_box $@box Bool
+  %2a = project_box %2 : $@box Bool, 0
+  %3 = alloc_box $@box Bool
+  %3a = project_box %3 : $@box Bool, 0
   store %0 to %2a : $*Bool
   store %1 to %3a : $*Bool
   %6 = function_ref @short_circuit_or : $@convention(thin) (Bool, @callee_owned () -> Bool) -> Bool
@@ -543,10 +557,10 @@ sil @test_short_circuit2 : $@convention(thin) (Bool, Bool) -> Bool {
   // CHECK: return {{.*}}
 
 bb0(%0 : $Bool, %1 : $Bool):
-  %2 = alloc_box $Bool
-  %2a = project_box %2 : $@box Bool
-  %3 = alloc_box $Bool
-  %3a = project_box %3 : $@box Bool
+  %2 = alloc_box $@box Bool
+  %2a = project_box %2 : $@box Bool, 0
+  %3 = alloc_box $@box Bool
+  %3a = project_box %3 : $@box Bool, 0
   store %0 to %2a : $*Bool
   store %1 to %3a : $*Bool
   %6 = function_ref @short_circuit_or : $@convention(thin) (Bool, @callee_owned () -> Bool) -> Bool
@@ -576,8 +590,8 @@ bb0(%0 : $Builtin.Int2048, %1 : $@thin Int64.Type):
 sil @test_with_dead_argument : $@convention(thin) () -> () {
 bb0:
   %0 = tuple ()
-  %1 = alloc_box $Int64
-  %1a = project_box %1 : $@box Int64
+  %1 = alloc_box $@box Int64
+  %1a = project_box %1 : $@box Int64, 0
   %2 = function_ref @convertFromBuiltinIntegerLiteral : $@convention(thin) (Builtin.Int2048, @thin Int64.Type) -> Int64
   %3 = metatype $@thin Int64.Type
   %4 = integer_literal $Builtin.Int2048, 1
@@ -845,3 +859,47 @@ sil shared [transparent] @identity_closure : $@convention(thin) (Builtin.Int8) -
 bb0(%0 : $Builtin.Int8):
   return %0 : $Builtin.Int8
 }
+
+sil [transparent] @P2_s : $@convention(method) <Self where Self : P2> (@in_guaranteed Self) -> Int32 {
+bb0(%0 : $*Self):
+  %2 = alloc_stack $Self
+  copy_addr %0 to [initialization] %2 : $*Self
+  %4 = witness_method $Self, #P2.c!getter.1 : $@convention(witness_method) <τ_0_0 where τ_0_0 : P2> (@in_guaranteed τ_0_0) -> Int32
+  %5 = apply %4<Self>(%2) : $@convention(witness_method) <τ_0_0 where τ_0_0 : P2> (@in_guaranteed τ_0_0) -> Int32
+  destroy_addr %2 : $*Self
+  %7 = integer_literal $Builtin.Int32, 1
+  %8 = struct_extract %5 : $Int32, #Int32._value
+  %9 = integer_literal $Builtin.Int1, -1
+  %10 = builtin "sadd_with_overflow_Int32"(%8 : $Builtin.Int32, %7 : $Builtin.Int32, %9 : $Builtin.Int1) : $(Builtin.Int32, Builtin.Int1)
+  %11 = tuple_extract %10 : $(Builtin.Int32, Builtin.Int1), 0
+  %12 = tuple_extract %10 : $(Builtin.Int32, Builtin.Int1), 1
+  cond_fail %12 : $Builtin.Int1
+  %14 = struct $Int32 (%11 : $Builtin.Int32)
+  dealloc_stack %2 : $*Self
+  return %14 : $Int32
+}
+
+// Check that P2_s call can be properly inlined and the resulting witness_method instruction
+// uses the opened archetype from the caller.
+// CHECK-LABEL: sil hidden @L_start
+// CHECK: open_existential_addr{{.*}}$*@[[OPENED_ARCHETYPE:opened\("[A-Z0-9-]+"\) P2]]
+// CHECK: witness_method $@[[OPENED_ARCHETYPE]], #P2.c!getter.1, %{{[0-9]+}} : $*@[[OPENED_ARCHETYPE]]
+// CHECK: return
+sil hidden @L_start : $@convention(method) (@in_guaranteed L) -> Int32 {
+bb0(%0 : $*L):
+  %2 = struct_element_addr %0 : $*L, #L.o
+  %3 = alloc_stack $P2
+  copy_addr %2 to [initialization] %3 : $*P2
+  %5 = open_existential_addr %3 : $*P2 to $*@opened("5C6E227C-235E-11E6-AA98-B8E856428C60") P2
+  %6 = function_ref @P2_s : $@convention(method) <τ_0_0 where τ_0_0 : P2> (@in_guaranteed τ_0_0) -> Int32
+  %7 = apply %6<@opened("5C6E227C-235E-11E6-AA98-B8E856428C60") P2>(%5) : $@convention(method) <τ_0_0 where τ_0_0 : P2> (@in_guaranteed τ_0_0) -> Int32
+  destroy_addr %5 : $*@opened("5C6E227C-235E-11E6-AA98-B8E856428C60") P2
+  deinit_existential_addr %3 : $*P2
+  dealloc_stack %3 : $*P2
+  return %7 : $Int32
+}
+
+sil_default_witness_table hidden P2 {
+  no_default
+}
+

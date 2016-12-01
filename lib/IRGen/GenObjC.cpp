@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -40,6 +40,7 @@
 #include "GenProto.h"
 #include "GenType.h"
 #include "HeapTypeInfo.h"
+#include "IRGenDebugInfo.h"
 #include "IRGenFunction.h"
 #include "IRGenModule.h"
 #include "Linking.h"
@@ -511,6 +512,7 @@ namespace {
     Selector(SILDeclRef ref) {
       switch (ref.kind) {
       case SILDeclRef::Kind::DefaultArgGenerator:
+      case SILDeclRef::Kind::StoredPropertyInitializer:
       case SILDeclRef::Kind::EnumElement:
       case SILDeclRef::Kind::GlobalAccessor:
       case SILDeclRef::Kind::GlobalGetter:
@@ -727,65 +729,25 @@ void irgen::addObjCMethodCallImplicitArguments(IRGenFunction &IGF,
   args.add(IGF.emitObjCSelectorRefLoad(selector.str()));
 }
 
-/// Return the formal type that we would use for +allocWithZone:.
-static CanSILFunctionType getAllocObjectFormalType(ASTContext &ctx,
-                                                   CanType classType) {
-  SILParameterInfo inputs[] = {
-    SILParameterInfo(CanType(ctx.TheRawPointerType), /* (NSZone*), kindof */
-                     ParameterConvention::Direct_Unowned),
-    SILParameterInfo(CanType(MetatypeType::get(classType,
-                                               MetatypeRepresentation::Thick)),
-                     ParameterConvention::Direct_Unowned)
-  };
-  auto result = SILResultInfo(classType, ResultConvention::Owned);
-  auto extInfo = SILFunctionType::ExtInfo(SILFunctionType::Representation::ObjCMethod,
-                                          /*noreturn*/ false,
-                                          /*pseudogeneric*/ true);
-
-  return SILFunctionType::get(nullptr, extInfo,
-                              /*callee*/ ParameterConvention::Direct_Unowned,
-                              inputs, result, None, ctx);
-}
-
 /// Call [self allocWithZone: nil].
 llvm::Value *irgen::emitObjCAllocObjectCall(IRGenFunction &IGF,
                                             llvm::Value *self,
                                             CanType classType) {
-  // Compute the formal type that we expect +allocWithZone: to have.
-  auto formalType = getAllocObjectFormalType(IGF.IGM.Context, classType);
+  // Get an appropriately-cast function pointer.
+  auto fn = IGF.IGM.getObjCAllocWithZoneFn();
 
-  // Compute the appropriate LLVM type for the function.
-  ForeignFunctionInfo foreignInfo;
-  llvm::AttributeSet attrs;
-  auto fnTy = IGF.IGM.getFunctionType(formalType, attrs, &foreignInfo);
-
-  // Get the messenger function.
-  llvm::Constant *messenger = IGF.IGM.getObjCMsgSendFn();
-  messenger = llvm::ConstantExpr::getBitCast(messenger, fnTy->getPointerTo());
-
-  // Prepare the call.
-  CallEmission emission(IGF, Callee::forKnownFunction(formalType,
-                                                      formalType, {},
-                                                      messenger, nullptr,
-                                                      foreignInfo));
-
-  // Emit the arguments.
-  {
-    Explosion args;
-    args.add(self);
-    args.add(IGF.emitObjCSelectorRefLoad("allocWithZone:"));
-    args.add(llvm::ConstantPointerNull::get(IGF.IGM.Int8PtrTy));
-    emission.setArgs(args);
+  if (self->getType() != IGF.IGM.ObjCClassPtrTy) {
+    auto fnTy = llvm::FunctionType::get(self->getType(), self->getType(),
+                                        false)->getPointerTo();
+    fn = llvm::ConstantExpr::getBitCast(fn, fnTy);
   }
-
-  // Emit the call.
-  Explosion out;
-  emission.emitToExplosion(out);
-  return out.claimNext();
+  
+  auto call = IGF.Builder.CreateCall(fn, self);
+  return call;
 }
 
 static llvm::Function *emitObjCPartialApplicationForwarder(IRGenModule &IGM,
-                                            SILDeclRef method,
+                                                           ObjCMethod method,
                                             CanSILFunctionType origMethodType,
                                             CanSILFunctionType resultType,
                                             const HeapLayout &layout,
@@ -810,6 +772,8 @@ static llvm::Function *emitObjCPartialApplicationForwarder(IRGenModule &IGM,
   fwd->setAttributes(updatedAttrs);
   
   IRGenFunction subIGF(IGM, fwd);
+  if (IGM.DebugInfo)
+    IGM.DebugInfo->emitArtificialFunction(subIGF, fwd);
   
   // Do we need to lifetime-extend self?
   bool lifetimeExtendsSelf;
@@ -880,11 +844,43 @@ static llvm::Function *emitObjCPartialApplicationForwarder(IRGenModule &IGM,
     }
   }
 
+  // Translate direct parameters passed indirectly.
+  Explosion translatedParams;
+
+  // We already handled self.
+  assert(origMethodType->hasSelfParam());
+  auto origParamInfos = origMethodType->getParameters();
+  origParamInfos = origParamInfos.drop_back();
+
+  for (auto info : origParamInfos) {
+    // Addresses consist of a single pointer argument.
+    if (isIndirectParameter(info.getConvention())) {
+      translatedParams.add(params.claimNext());
+      continue;
+    }
+    // Otherwise, we have a loadable type that can either be passed directly or
+    // indirectly.
+    assert(info.getSILType().isObject());
+    auto &ti = cast<LoadableTypeInfo>(IGM.getTypeInfo(info.getSILType()));
+    auto schema = ti.getSchema();
+
+    // Load the indirectly passed parameter.
+    if (schema.requiresIndirectParameter(IGM)) {
+      Address paramAddr = ti.getAddressForPointer(params.claimNext());
+      ti.loadAsTake(subIGF, paramAddr, translatedParams);
+      continue;
+    }
+    // Pass along the value.
+    ti.reexplode(subIGF, params, translatedParams);
+  }
+
   // Prepare the call to the underlying method.
+  
   CallEmission emission
-    = prepareObjCMethodRootCall(subIGF, method, origMethodType, origMethodType,
+    = prepareObjCMethodRootCall(subIGF, method.getMethod(),
+                                origMethodType, origMethodType,
                                 ArrayRef<Substitution>{},
-                                ObjCMessageKind::Normal);
+                                method.getMessageKind());
   
   Explosion args;
 
@@ -892,8 +888,9 @@ static llvm::Function *emitObjCPartialApplicationForwarder(IRGenModule &IGM,
   if (formalIndirectResult)
     args.add(formalIndirectResult);
 
-  addObjCMethodCallImplicitArguments(subIGF, args, method, self, SILType());
-  args.add(params.claimAll());
+  addObjCMethodCallImplicitArguments(subIGF, args, method.getMethod(), self,
+                                     method.getSearchType());
+  args.add(translatedParams.claimAll());
   emission.setArgs(args);
   
   // Cleanup that always has to occur after the function call.
@@ -927,7 +924,7 @@ static llvm::Function *emitObjCPartialApplicationForwarder(IRGenModule &IGM,
 }
 
 void irgen::emitObjCPartialApplication(IRGenFunction &IGF,
-                                       SILDeclRef method,
+                                       ObjCMethod method,
                                        CanSILFunctionType origMethodType,
                                        CanSILFunctionType resultType,
                                        llvm::Value *self,
@@ -980,7 +977,7 @@ static llvm::Constant *findSwiftAsObjCThunk(IRGenModule &IGM, SILDeclRef ref) {
   auto fn = IGM.getAddrOfSILFunction(SILFn, NotForDefinition);
   fn->setVisibility(llvm::GlobalValue::DefaultVisibility);
   fn->setLinkage(llvm::GlobalValue::InternalLinkage);
-  fn->setUnnamedAddr(true);
+  fn->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
 
   return llvm::ConstantExpr::getBitCast(fn, IGM.Int8PtrTy);
 }

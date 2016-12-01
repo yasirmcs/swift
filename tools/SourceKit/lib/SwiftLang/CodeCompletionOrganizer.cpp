@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -1178,7 +1178,7 @@ void CompletionBuilder::getFilterName(CodeCompletionString *str,
     for (auto C : str->getChunks().slice(*FirstTextChunk)) {
 
       if (C.is(ChunkKind::BraceStmtWithCursor))
-        break;
+        break; // Don't include brace-stmt in filter name.
 
       if (C.is(ChunkKind::Equal)) {
         OS << C.getText();
@@ -1191,7 +1191,7 @@ void CompletionBuilder::getFilterName(CodeCompletionString *str,
       case ChunkKind::CallParameterInternalName:
       case ChunkKind::CallParameterClosureType:
       case ChunkKind::CallParameterType:
-      case ChunkKind::DeclAttrParamEqual:
+      case ChunkKind::DeclAttrParamColon:
       case ChunkKind::Comma:
       case ChunkKind::Whitespace:
       case ChunkKind::Ellipsis:
@@ -1222,8 +1222,6 @@ void CompletionBuilder::getDescription(SwiftResult *result, raw_ostream &OS,
   if (FirstTextChunk.hasValue()) {
     for (auto C : str->getChunks().slice(*FirstTextChunk)) {
       using ChunkKind = CodeCompletionString::Chunk::ChunkKind;
-      if (C.is(ChunkKind::BraceStmtWithCursor))
-        break;
 
       // FIXME: we need a more uniform way to handle operator completions.
       if (C.is(ChunkKind::Equal))

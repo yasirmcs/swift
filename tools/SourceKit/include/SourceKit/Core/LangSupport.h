@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -27,7 +27,6 @@ namespace llvm {
   class MemoryBuffer;
 }
 namespace SourceKit {
-  class Context;
 
 struct EntityInfo {
   UIdent Kind;
@@ -254,6 +253,8 @@ struct CursorInfo {
   StringRef Name;
   StringRef USR;
   StringRef TypeName;
+  StringRef TypeUSR;
+  StringRef ContainerTypeUSR;
   StringRef DocComment;
   StringRef TypeInterface;
   StringRef GroupName;
@@ -279,6 +280,13 @@ struct CursorInfo {
   /// All groups of the module name under cursor.
   ArrayRef<StringRef> ModuleGroupArray;
   bool IsSystem = false;
+};
+
+struct RangeInfo {
+  bool IsCancelled = false;
+  UIdent RangeKind;
+  StringRef ExprType;
+  StringRef RangeContent;
 };
 
 struct RelatedIdentsInfo {
@@ -412,6 +420,10 @@ public:
                                    bool SynthesizedExtensions,
                                    Optional<StringRef> InterestedUSR) = 0;
 
+  virtual void editorOpenTypeInterface(EditorConsumer &Consumer,
+                                       ArrayRef<const char *> Args,
+                                       StringRef TypeUSR) = 0;
+
   virtual void editorOpenHeaderInterface(EditorConsumer &Consumer,
                                          StringRef Name,
                                          StringRef HeaderName,
@@ -446,6 +458,10 @@ public:
                              ArrayRef<const char *> Args,
                           std::function<void(const CursorInfo &)> Receiver) = 0;
 
+  virtual void getRangeInfo(StringRef Filename, unsigned Offset, unsigned Length,
+                            ArrayRef<const char *> Args,
+                            std::function<void(const RangeInfo&)> Receiver) = 0;
+
   virtual void
   getCursorInfoFromUSR(StringRef Filename, StringRef USR,
                        ArrayRef<const char *> Args,
@@ -472,9 +488,6 @@ public:
                           StringRef ModuleName,
                           ArrayRef<const char *> Args,
                           DocInfoConsumer &Consumer) = 0;
-
-  static std::unique_ptr<LangSupport> createSwiftLangSupport(
-                                                     SourceKit::Context &SKCtx);
 };
 
 } // namespace SourceKit

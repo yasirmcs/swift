@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -433,13 +433,15 @@ public:
 
   static data_type ReadData(internal_key_type key, const uint8_t *data,
                             unsigned length) {
+    const constexpr auto recordSize = sizeof(uint32_t) + 1 + sizeof(uint32_t);
+    assert(length % recordSize == 0 && "invalid length");
     data_type result;
     while (length > 0) {
       TypeID typeID = endian::readNext<uint32_t, little, unaligned>(data);
       bool isInstanceMethod = *data++ != 0;
       DeclID methodID = endian::readNext<uint32_t, little, unaligned>(data);
       result.push_back(std::make_tuple(typeID, isInstanceMethod, methodID));
-      length -= sizeof(uint32_t) + 1 + sizeof(uint32_t);
+      length -= recordSize;
     }
 
     return result;
@@ -506,6 +508,9 @@ bool ModuleFile::readIndexBlock(llvm::BitstreamCursor &cursor) {
         break;
       case index_block::OPERATORS:
         OperatorDecls = readDeclTable(scratch, blobData);
+        break;
+      case index_block::PRECEDENCE_GROUPS:
+        PrecedenceGroupDecls = readDeclTable(scratch, blobData);
         break;
       case index_block::EXTENSIONS:
         ExtensionDecls = readDeclTable(scratch, blobData);
@@ -711,10 +716,14 @@ static bool areCompatibleArchitectures(const llvm::Triple &moduleTarget,
   if (moduleTarget.getArch() == ctxTarget.getArch())
     return true;
 
-  auto archPair = std::minmax(moduleTarget.getArch(), ctxTarget.getArch());
-  if (archPair == std::minmax(llvm::Triple::arm, llvm::Triple::thumb))
+  // Special case: ARM and Thumb are compatible.
+  const llvm::Triple::ArchType moduleArch = moduleTarget.getArch();
+  const llvm::Triple::ArchType ctxArch = ctxTarget.getArch();
+  if ((moduleArch == llvm::Triple::arm && ctxArch == llvm::Triple::thumb) ||
+      (moduleArch == llvm::Triple::thumb && ctxArch == llvm::Triple::arm))
     return true;
-  if (archPair == std::minmax(llvm::Triple::armeb, llvm::Triple::thumbeb))
+  if ((moduleArch == llvm::Triple::armeb && ctxArch == llvm::Triple::thumbeb) ||
+      (moduleArch == llvm::Triple::thumbeb && ctxArch == llvm::Triple::armeb))
     return true;
 
   return false;
@@ -725,8 +734,11 @@ static bool areCompatibleOSs(const llvm::Triple &moduleTarget,
   if (moduleTarget.getOS() == ctxTarget.getOS())
     return true;
 
-  auto osPair = std::minmax(moduleTarget.getOS(), ctxTarget.getOS());
-  if (osPair == std::minmax(llvm::Triple::Darwin, llvm::Triple::MacOSX))
+  // Special case: macOS and Darwin are compatible.
+  const llvm::Triple::OSType moduleOS = moduleTarget.getOS();
+  const llvm::Triple::OSType ctxOS = ctxTarget.getOS();
+  if ((moduleOS == llvm::Triple::Darwin && ctxOS == llvm::Triple::MacOSX) ||
+      (moduleOS == llvm::Triple::MacOSX && ctxOS == llvm::Triple::Darwin))
     return true;
 
   return false;
@@ -755,7 +767,8 @@ ModuleFile::ModuleFile(
       ModuleInputReader(getStartBytePtr(this->ModuleInputBuffer.get()),
                         getEndBytePtr(this->ModuleInputBuffer.get())),
       ModuleDocInputReader(getStartBytePtr(this->ModuleDocInputBuffer.get()),
-                           getEndBytePtr(this->ModuleDocInputBuffer.get())) {
+                           getEndBytePtr(this->ModuleDocInputBuffer.get())),
+      DeserializedTypeCallback([](Type ty) {}) {
   assert(getStatus() == Status::Valid);
   Bits.IsFramework = isFramework;
 
@@ -1089,7 +1102,7 @@ Status ModuleFile::associateWithFileContext(FileUnit *file,
              "invalid module name (submodules not yet supported)");
     }
     auto module = getModule(modulePath);
-    if (!module) {
+    if (!module || module->failedToLoad()) {
       // If we're missing the module we're shadowing, treat that specially.
       if (modulePath.size() == 1 &&
           modulePath.front() == file->getParentModule()->getName()) {
@@ -1113,8 +1126,9 @@ Status ModuleFile::associateWithFileContext(FileUnit *file,
       auto scopeID = ctx.getIdentifier(scopePath);
       assert(!scopeID.empty() &&
              "invalid decl name (non-top-level decls not supported)");
-      auto path = Module::AccessPathTy({scopeID, SourceLoc()});
-      dependency.Import = { ctx.AllocateCopy(path), module };
+      std::pair<Identifier, SourceLoc> accessPathElem(scopeID, SourceLoc());
+      dependency.Import = {ctx.AllocateCopy(llvm::makeArrayRef(accessPathElem)),
+                           module};
     }
   }
 
@@ -1202,6 +1216,21 @@ OperatorDecl *ModuleFile::lookupOperator(Identifier name, DeclKind fixity) {
   // FIXME: operators re-exported from other modules?
 
   return nullptr;
+}
+
+PrecedenceGroupDecl *ModuleFile::lookupPrecedenceGroup(Identifier name) {
+  PrettyModuleFileDeserialization stackEntry(*this);
+
+  if (!PrecedenceGroupDecls)
+    return nullptr;
+
+  auto iter = PrecedenceGroupDecls->find(name);
+  if (iter == PrecedenceGroupDecls->end())
+    return nullptr;
+
+  auto data = *iter;
+  assert(data.size() == 1);
+  return cast<PrecedenceGroupDecl>(getDecl(data[0].second));
 }
 
 void ModuleFile::getImportedModules(
@@ -1471,6 +1500,13 @@ ModuleFile::collectLinkLibraries(Module::LinkLibraryCallback callback) const {
 
 void ModuleFile::getTopLevelDecls(SmallVectorImpl<Decl *> &results) {
   PrettyModuleFileDeserialization stackEntry(*this);
+  if (PrecedenceGroupDecls) {
+    for (auto entry : PrecedenceGroupDecls->data()) {
+      for (auto item : entry)
+        results.push_back(getDecl(item.second));
+    }
+  }
+
   if (OperatorDecls) {
     for (auto entry : OperatorDecls->data()) {
       for (auto item : entry)

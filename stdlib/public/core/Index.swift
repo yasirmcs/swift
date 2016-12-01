@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -17,25 +17,25 @@ public protocol _Incrementable : Equatable {}
 
 @available(*, unavailable, message: "Use \'-= 1\' or call collection.prior(Index)")
 @discardableResult
-public prefix func -- <T : _Incrementable> (i: inout T) -> T {
+public prefix func -- <T : _Incrementable>(i: inout T) -> T {
   Builtin.unreachable()
 }
 
 @available(*, unavailable, message: "Use \'-= 1\' or call collection.prior(Index)")
 @discardableResult
-public postfix func -- <T : _Incrementable> (i: inout T) -> T {
+public postfix func -- <T : _Incrementable>(i: inout T) -> T {
   Builtin.unreachable()
 }
 
 @available(*, unavailable, message: "Use \'+= 1\' or call 'collection.index(after: Index)")
 @discardableResult
-public prefix func ++ <T : _Incrementable> (i: inout T) -> T {
+public prefix func ++ <T : _Incrementable>(i: inout T) -> T {
   Builtin.unreachable()
 }
 
 @available(*, unavailable, message: "Use \'+= 1\' or call 'collection.index(after: Index)")
 @discardableResult
-public postfix func ++ <T : _Incrementable> (i: inout T) -> T {
+public postfix func ++ <T : _Incrementable>(i: inout T) -> T {
   Builtin.unreachable()
 }
 

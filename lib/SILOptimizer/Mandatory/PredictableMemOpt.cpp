@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -575,8 +575,9 @@ AggregateAvailableValues(SILInstruction *Inst, SILType LoadTy,
   // otherwise emit a load of the value.
   auto Val = AvailableValues[FirstElt];
   if (!Val.first)
-    return B.createLoad(Inst->getLoc(), Address);
-  
+    return B.createLoad(Inst->getLoc(), Address,
+                        LoadOwnershipQualifier::Unqualified);
+
   SILValue EltVal = ExtractSubElement(Val.first, Val.second, B, Inst->getLoc());
   // It must be the same type as LoadTy if available.
   assert(EltVal->getType() == LoadTy &&
@@ -738,8 +739,8 @@ bool AllocOptimize::promoteDestroyAddr(DestroyAddrInst *DAI) {
   
   DEBUG(llvm::dbgs() << "  *** Promoting destroy_addr: " << *DAI << "\n");
   DEBUG(llvm::dbgs() << "      To value: " << *NewVal << "\n");
-  
-  SILBuilderWithScope(DAI).emitReleaseValueOperation(DAI->getLoc(), NewVal);
+
+  SILBuilderWithScope(DAI).emitDestroyValueOperation(DAI->getLoc(), NewVal);
   DAI->eraseFromParent();
   return true;
 }

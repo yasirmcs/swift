@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -23,9 +23,37 @@
 using namespace swift;
 using namespace swift::index;
 
+
+static bool
+printArtificialName(const swift::ValueDecl *VD, llvm::raw_ostream &OS) {
+  auto *FD = dyn_cast<FuncDecl>(VD);
+  if (!FD)
+    return true;
+  switch (FD->getAccessorKind()) {
+  case AccessorKind::IsGetter:
+    OS << "getter:" << FD->getAccessorStorageDecl()->getFullName();
+    return false;
+  case AccessorKind::IsSetter:
+    OS << "setter:" << FD->getAccessorStorageDecl()->getFullName();
+    return false;
+  case AccessorKind::IsDidSet:
+    OS << "didSet:" << FD->getAccessorStorageDecl()->getFullName();
+    return false;
+  case AccessorKind::IsWillSet:
+    OS << "willSet:" << FD->getAccessorStorageDecl()->getFullName() ;
+    return false;
+
+  case AccessorKind::NotAccessor:
+  case AccessorKind::IsMaterializeForSet:
+  case AccessorKind::IsAddressor:
+  case AccessorKind::IsMutableAddressor:
+    return true;
+  }
+}
+
 static bool printDisplayName(const swift::ValueDecl *D, llvm::raw_ostream &OS) {
   if (!D->hasName())
-    return true;
+    return printArtificialName(D, OS);
 
   OS << D->getFullName();
   return false;
@@ -232,6 +260,10 @@ private:
     if (!EntitiesStack.empty())
       return EntitiesStack.back().D;
     return nullptr;
+  }
+
+  Expr *getCurrentExpr() {
+    return ExprStack.empty() ? nullptr : ExprStack.back();
   }
 
   Expr *getParentExpr() {
@@ -482,7 +514,7 @@ bool IndexSwiftASTWalker::startEntityRef(ValueDecl *D, SourceLoc Loc) {
 
   if (isa<AbstractFunctionDecl>(D)) {
     IndexSymbol Info;
-    if (initCallRefIndexSymbol(ExprStack.back(), getParentExpr(), D, Loc, Info))
+    if (initCallRefIndexSymbol(getCurrentExpr(), getParentExpr(), D, Loc, Info))
       return false;
 
     return startEntity(D, Info);
@@ -806,14 +838,14 @@ static bool isTestCandidate(ValueDecl *D) {
     return false;
 
   // 2. ...on a class or extension (not a struct)...
-  auto NTD = getNominalParent(D);
-  if (!NTD)
+  auto parentNTD = getNominalParent(D);
+  if (!parentNTD)
     return false;
-  if (!isa<ClassDecl>(NTD))
+  if (!isa<ClassDecl>(parentNTD))
     return false;
 
   // 3. ...that returns void...
-  Type RetTy = FD->getResultType();
+  Type RetTy = FD->getResultInterfaceType();
   if (RetTy && !RetTy->isVoid())
     return false;
 
@@ -825,10 +857,10 @@ static bool isTestCandidate(ValueDecl *D) {
 
   // 5. ...is of at least 'internal' accessibility (unless we can use
   //    Objective-C reflection)...
-#if SWIFT_OBJC_INTEROP
-  if (D->getFormalAccess() < Accessibility::Internal)
+  if (!D->getASTContext().LangOpts.EnableObjCInterop &&
+      (D->getFormalAccess() < Accessibility::Internal ||
+      parentNTD->getFormalAccess() < Accessibility::Internal))
     return false;
-#endif
 
   // 6. ...and starts with "test".
   if (FD->getName().str().startswith("test"))

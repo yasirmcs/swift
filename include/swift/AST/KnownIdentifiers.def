@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -25,9 +25,12 @@
 IDENTIFIER(alloc)
 IDENTIFIER(allocWithZone)
 IDENTIFIER(allZeros)
+IDENTIFIER(Any)
 IDENTIFIER(atIndexedSubscript)
 IDENTIFIER_(bridgeToObjectiveC)
 IDENTIFIER_WITH_NAME(code_, "_code")
+IDENTIFIER(CoreGraphics)
+IDENTIFIER(CoreMedia)
 IDENTIFIER(CGFloat)
 IDENTIFIER(CVarArg)
 IDENTIFIER(Darwin)
@@ -42,6 +45,7 @@ IDENTIFIER(hashValue)
 IDENTIFIER(init)
 IDENTIFIER(initStorage)
 IDENTIFIER(initialValue)
+IDENTIFIER(Key)
 IDENTIFIER(makeIterator)
 IDENTIFIER(Iterator)
 IDENTIFIER(load)
@@ -77,10 +81,16 @@ IDENTIFIER(with)
 IDENTIFIER_WITH_NAME(MatchOperator, "~=")
 IDENTIFIER_WITH_NAME(EqualsOperator, "==")
 
+// Precedence groups
+IDENTIFIER(AssignmentPrecedence)
+IDENTIFIER(CastingPrecedence)
+IDENTIFIER(DefaultPrecedence)
+IDENTIFIER(FunctionArrowPrecedence)
+IDENTIFIER(TernaryPrecedence)
+
 // Builtins and literals
 IDENTIFIER_(MaxBuiltinIntegerType)
 IDENTIFIER(IntegerLiteralType)
-IDENTIFIER(boolValue)
 IDENTIFIER(nilLiteral)
 IDENTIFIER(integerLiteral)
 IDENTIFIER_(builtinIntegerLiteral)
@@ -110,6 +120,10 @@ IDENTIFIER(arrayLiteral)
 IDENTIFIER(dictionaryLiteral)
 IDENTIFIER_(getBuiltinLogicValue)
 IDENTIFIER(className)
+
+IDENTIFIER_(ErrorType)
+IDENTIFIER(Code)
+IDENTIFIER_(nsError)
 
 #undef IDENTIFIER
 #undef IDENTIFIER_

@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -29,7 +29,15 @@ SWIFT_BEGIN_NULLABILITY_ANNOTATIONS
 
 SWIFT_RUNTIME_STDLIB_INTERFACE
 __swift_ssize_t
-swift_stdlib_readLine_stdin(char * _Nullable * _Nonnull LinePtr);
+swift_stdlib_readLine_stdin(unsigned char * _Nullable * _Nonnull LinePtr);
+
+SWIFT_RUNTIME_STDLIB_INTERFACE
+char * _Nullable * _Nonnull
+_swift_stdlib_getUnsafeArgvArgc(int * _Nonnull outArgLen);
+  
+SWIFT_RUNTIME_STDLIB_INTERFACE
+void
+_swift_stdlib_overrideUnsafeArgvArgc(char * _Nullable * _Nonnull argv, int argc);
 
 SWIFT_END_NULLABILITY_ANNOTATIONS
 

@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -15,11 +15,13 @@
 //===----------------------------------------------------------------------===//
 
 #include "swift/Subsystems.h"
+#include "swift/AST/AccessScope.h"
 #include "swift/AST/ArchetypeBuilder.h"
 #include "swift/AST/AST.h"
 #include "swift/AST/ASTContext.h"
 #include "swift/AST/ASTWalker.h"
 #include "swift/AST/ForeignErrorConvention.h"
+#include "swift/AST/GenericEnvironment.h"
 #include "swift/AST/Mangle.h"
 #include "swift/AST/PrettyStackTrace.h"
 #include "swift/Basic/SourceManager.h"
@@ -78,8 +80,8 @@ struct ASTNodeBase {};
     using ScopeLike = llvm::PointerUnion<DeclContext *, BraceStmt *>;
     SmallVector<ScopeLike, 4> Scopes;
 
-    /// The set of archetypes that are currently available.
-    SmallPtrSet<ArchetypeType *, 4> ActiveArchetypes;
+    /// The set of primary archetypes that are currently available.
+    SmallVector<GenericEnvironment *, 2> GenericEnv;
 
     /// \brief The stack of optional evaluations active at this point.
     SmallVector<OptionalEvaluationExpr *, 4> OptionalEvaluations;
@@ -100,17 +102,6 @@ struct ASTNodeBase {};
                    llvm::SmallBitVector> ClosureDiscriminators;
     DeclContext *CanonicalTopLevelContext = nullptr;
 
-    /// Collect all of the archetypes in this declaration context and its
-    /// parents.
-    void collectAllArchetypes(DeclContext *dc) {
-      for (auto genericParams = dc->getGenericParamsOfContext();
-           genericParams;
-           genericParams = genericParams->getOuterParameters()) {
-        ActiveArchetypes.insert(genericParams->getAllArchetypes().begin(),
-                                genericParams->getAllArchetypes().end());
-      }
-    }
-
     Verifier(PointerUnion<Module *, SourceFile *> M, DeclContext *DC)
       : M(M),
         Ctx(M.is<Module *>() ? M.get<Module *>()->getASTContext()
@@ -119,7 +110,7 @@ struct ASTNodeBase {};
         HadError(Ctx.hadError())
     {
       Scopes.push_back(DC);
-      collectAllArchetypes(DC);
+      GenericEnv.push_back(DC->getGenericEnvironmentOfContext());
     }
 
   public:
@@ -447,23 +438,20 @@ struct ASTNodeBase {};
           }
 
           // Otherwise, the archetype needs to be from this scope.
-          if (ActiveArchetypes.count(archetype) == 0) {
-            // FIXME: Make an exception for serialized extensions, which don't
-            // currently have the correct archetypes.
-            if (auto activeScope = Scopes.back().dyn_cast<DeclContext *>()) {
-              do {
-                if (isa<ExtensionDecl>(activeScope) &&
-                    isa<LoadedFile>(activeScope->getModuleScopeContext())) {
-                  return false;
-                }
-                activeScope = activeScope->getParent();
-              } while (!activeScope->isModuleScopeContext());
-            }
+          if (GenericEnv.empty() || !GenericEnv.back()) {
+            Out << "AST verification error: archetype outside of generic "
+                   "context: " << archetype->getString() << "\n";
+            return true;
+          }
 
+          // Get the primary archetype.
+          auto *parent = archetype->getPrimary();
+
+          if (!GenericEnv.back()->containsPrimaryArchetype(parent)) {
             Out << "AST verification error: archetype "
                 << archetype->getString() << " not allowed in this context\n";
 
-            auto knownDC = Ctx.ArchetypeContexts.find(archetype);
+            auto knownDC = Ctx.ArchetypeContexts.find(parent);
             if (knownDC != Ctx.ArchetypeContexts.end()) {
               llvm::errs() << "archetype came from:\n";
               knownDC->second->dumpContext();
@@ -474,7 +462,10 @@ struct ASTNodeBase {};
           }
 
           // Make sure that none of the nested types are dependent.
-          for (const auto &nested : archetype->getNestedTypes()) {
+          for (const auto &nested : archetype->getKnownNestedTypes()) {
+            if (!nested.second)
+              continue;
+            
             if (auto nestedType = nested.second.getAsConcreteType()) {
               if (nestedType->hasTypeParameter()) {
                 Out << "Nested type " << nested.first.str()
@@ -504,58 +495,18 @@ struct ASTNodeBase {};
 
     // Specialized verifiers.
 
-    /// Retrieve the generic parameters of the specified declaration context,
-    /// without looking into its parent contexts.
-    static GenericParamList *getImmediateGenericParams(DeclContext *dc) {
-      switch (dc->getContextKind()) {
-      case DeclContextKind::Module:
-      case DeclContextKind::FileUnit:
-      case DeclContextKind::TopLevelCodeDecl:
-      case DeclContextKind::Initializer:
-      case DeclContextKind::AbstractClosureExpr:
-      case DeclContextKind::SerializedLocal:
-      case DeclContextKind::SubscriptDecl:
-        return nullptr;
-
-      case DeclContextKind::AbstractFunctionDecl:
-        return cast<AbstractFunctionDecl>(dc)->getGenericParams();
-
-      case DeclContextKind::GenericTypeDecl:
-        return cast<GenericTypeDecl>(dc)->getGenericParams();
-
-      case DeclContextKind::ExtensionDecl:
-        return cast<ExtensionDecl>(dc)->getGenericParams();
-      }
-      llvm_unreachable("bad DeclContextKind");
-    }
-
     void pushScope(DeclContext *scope) {
       Scopes.push_back(scope);
-
-      // Add any archetypes from this scope into the set of active archetypes.
-      if (auto genericParams = getImmediateGenericParams(scope))
-        ActiveArchetypes.insert(genericParams->getAllArchetypes().begin(),
-                                genericParams->getAllArchetypes().end());
+      GenericEnv.push_back(scope->getGenericEnvironmentOfContext());
     }
     void pushScope(BraceStmt *scope) {
       Scopes.push_back(scope);
     }
     void popScope(DeclContext *scope) {
       assert(Scopes.back().get<DeclContext*>() == scope);
-
-      // Remove archetypes from this scope from the set of active archetypes.
-      if (auto genericParams
-            = getImmediateGenericParams(Scopes.back().get<DeclContext*>())) {
-        for (auto archetype : genericParams->getAllArchetypes()) {
-          if (!ActiveArchetypes.erase(archetype)) {
-            llvm::errs() << "archetype " << archetype
-                         << " not introduced by scope?\n";
-            abort();
-          }
-        }
-      }
-
+      assert(GenericEnv.back() == scope->getGenericEnvironmentOfContext());
       Scopes.pop_back();
+      GenericEnv.pop_back();
     }
     void popScope(BraceStmt *scope) {
       assert(Scopes.back().get<BraceStmt*>() == scope);
@@ -641,6 +592,24 @@ struct ASTNodeBase {};
       OptionalEvaluations.pop_back();
     }
 
+    // Register the OVEs in a collection upcast.
+    bool shouldVerify(CollectionUpcastConversionExpr *expr) {
+      if (!shouldVerify(cast<Expr>(expr)))
+        return false;
+
+      if (auto keyConversion = expr->getKeyConversion())
+        OpaqueValues[keyConversion.OrigValue] = 0;
+      if (auto valueConversion = expr->getValueConversion())
+        OpaqueValues[valueConversion.OrigValue] = 0;
+      return true;
+    }
+    void cleanup(CollectionUpcastConversionExpr *expr) {
+      if (auto keyConversion = expr->getKeyConversion())
+        OpaqueValues.erase(keyConversion.OrigValue);
+      if (auto valueConversion = expr->getValueConversion())
+        OpaqueValues.erase(valueConversion.OrigValue);
+    }
+
     /// Canonicalize the given DeclContext pointer, in terms of
     /// producing something that can be looked up in
     /// ClosureDiscriminators.
@@ -668,8 +637,23 @@ struct ASTNodeBase {};
       if (D->hasName())
         checkMangling(D);
 
-      if (D->hasType())
-        verifyChecked(D->getType());
+      if (D->hasInterfaceType())
+        verifyChecked(D->getInterfaceType());
+
+      if (D->hasAccessibility()) {
+        PrettyStackTraceDecl debugStack("verifying access", D);
+        if (D->getFormalAccessScope().isPublic() &&
+            D->getFormalAccess() < Accessibility::Public) {
+          Out << "non-public decl has no formal access scope\n";
+          D->dump(Out);
+          abort();
+        }
+        if (D->getEffectiveAccess() == Accessibility::Private) {
+          Out << "effective access should use 'fileprivate' for 'private'\n";
+          D->dump(Out);
+          abort();
+        }
+      }
 
       if (auto Overridden = D->getOverriddenDecl()) {
         if (D->getDeclContext() == Overridden->getDeclContext()) {
@@ -682,7 +666,7 @@ struct ASTNodeBase {};
       }
       
       if (D->getAttrs().hasAttribute<OverrideAttr>()) {
-        if (!D->isInvalid() && D->hasType() &&
+        if (!D->isInvalid() && D->hasInterfaceType() &&
             !isa<ClassDecl>(D->getDeclContext()) &&
             !isa<ExtensionDecl>(D->getDeclContext())) {
           PrettyStackTraceDecl debugStack("verifying override", D);
@@ -719,7 +703,8 @@ struct ASTNodeBase {};
       auto func = Functions.back();
       Type resultType;
       if (FuncDecl *FD = dyn_cast<FuncDecl>(func)) {
-        resultType = FD->getResultType();
+        resultType = FD->getResultInterfaceType();
+        resultType = ArchetypeBuilder::mapTypeIntoContext(FD, resultType);
       } else if (auto closure = dyn_cast<AbstractClosureExpr>(func)) {
         resultType = closure->getResultType();
       } else {
@@ -820,7 +805,7 @@ struct ASTNodeBase {};
         E->dump(Out);
         abort();
       }
-      if (E->getType()->is<PolymorphicFunctionType>()) {
+      if (E->getType()->is<GenericFunctionType>()) {
         PrettyStackTraceExpr debugStack(Ctx, "verifying decl reference", E);
         Out << "unspecialized reference with polymorphic type "
           << E->getType().getString() << "\n";
@@ -882,7 +867,7 @@ struct ASTNodeBase {};
       Type Ty = E->getType();
       if (!Ty)
         return;
-      if (Ty->is<ErrorType>())
+      if (Ty->hasError())
         return;
       if (!Ty->is<FunctionType>()) {
         PrettyStackTraceExpr debugStack(Ctx, "verifying closure", E);
@@ -1144,7 +1129,7 @@ struct ASTNodeBase {};
         Out << "\n";
         abort();
       }
-      if (PTK != PTK_UnsafePointer) {
+      if (PTK != PTK_UnsafePointer && PTK != PTK_UnsafeRawPointer) {
         Out << "StringToPointer converts to non-const pointer:\n";
         E->print(Out);
         Out << "\n";
@@ -1179,6 +1164,33 @@ struct ASTNodeBase {};
       }
 
       checkTrivialSubtype(srcTy, destTy, "DerivedToBaseExpr");
+      verifyCheckedBase(E);
+    }
+
+    void verifyChecked(AnyHashableErasureExpr *E) {
+      auto anyHashableDecl = Ctx.getAnyHashableDecl();
+      if (!anyHashableDecl) {
+        Out << "AnyHashable declaration could not be found\n";
+        abort();
+      }
+
+      auto hashableDecl = Ctx.getProtocol(KnownProtocolKind::Hashable);
+      if (!hashableDecl) {
+        Out << "Hashable declaration could not be found\n";
+        abort();
+      }
+
+      checkSameType(E->getType(), anyHashableDecl->getDeclaredType(),
+                    "AnyHashableErasureExpr and the standard AnyHashable type");
+
+      if (E->getConformance().getRequirement() != hashableDecl) {
+        Out << "conformance on AnyHashableErasureExpr was not for Hashable\n";
+        E->getConformance().dump();
+        abort();
+      }
+
+      verifyConformance(E->getSubExpr()->getType(), E->getConformance());
+
       verifyCheckedBase(E);
     }
 
@@ -1330,7 +1342,7 @@ struct ASTNodeBase {};
     void verifyChecked(SubscriptExpr *E) {
       PrettyStackTraceExpr debugStack(Ctx, "verifying SubscriptExpr", E);
 
-      if (!E->getDecl()) {
+      if (!E->hasDecl()) {
         Out << "Subscript expression is missing subscript declaration";
         abort();
       }
@@ -1467,10 +1479,6 @@ struct ASTNodeBase {};
 
       TupleType *TT = E->getType()->getAs<TupleType>();
       TupleType *SubTT = E->getSubExpr()->getType()->getAs<TupleType>();
-      if (!TT || (!SubTT && !E->isSourceScalar())) {
-        Out << "Unexpected types in TupleShuffleExpr\n";
-        abort();
-      }
       auto getSubElementType = [&](unsigned i) {
         if (E->isSourceScalar()) {
           assert(i == 0);
@@ -1478,6 +1486,15 @@ struct ASTNodeBase {};
         } else {
           return SubTT->getElementType(i);
         }
+      };
+
+      /// Retrieve the ith element type from the resulting tuple type.
+      auto getOuterElementType = [&](unsigned i) -> Type {
+        if (!TT) {
+          return E->getType()->getWithoutParens();
+        }
+
+        return TT->getElementType(i);
       };
 
       unsigned varargsIndex = 0;
@@ -1494,13 +1511,13 @@ struct ASTNodeBase {};
         }
         if (subElem == TupleShuffleExpr::CallerDefaultInitialize) {
           auto init = E->getCallerDefaultArgs()[callerDefaultArgIndex++];
-          if (!TT->getElementType(i)->isEqual(init->getType())) {
+          if (!getOuterElementType(i)->isEqual(init->getType())) {
             Out << "Type mismatch in TupleShuffleExpr\n";
             abort();
           }
           continue;
         }
-        if (!TT->getElementType(i)->isEqual(getSubElementType(subElem))) {
+        if (!getOuterElementType(i)->isEqual(getSubElementType(subElem))) {
           Out << "Type mismatch in TupleShuffleExpr\n";
           abort();
         }
@@ -1755,6 +1772,32 @@ struct ASTNodeBase {};
       }      
     }
 
+    /// Verify that the given conformance makes sense for the given
+    /// type.
+    void verifyConformance(Type type, ProtocolConformanceRef conformance) {
+      if (conformance.isAbstract()) {
+        if (!type->is<ArchetypeType>() && !type->isAnyExistentialType()) {
+          Out << "type " << type
+              << " should not have an abstract conformance to "
+              << conformance.getRequirement()->getName();
+          abort();
+        }
+
+        return;
+      }
+
+      if (type->getCanonicalType() !=
+            conformance.getConcrete()->getType()->getCanonicalType()) {
+        Out << "conforming type does not match conformance\n";
+        Out << "conforming type:\n";
+        type.dump(Out, 2);
+        Out << "\nconformance:\n";
+        conformance.getConcrete()->dump(Out, 2);
+        Out << "\n";
+        abort();
+      }
+    }
+
     /// Check the given explicit protocol conformance.
     void verifyConformance(Decl *decl, ProtocolConformance *conformance) {
       PrettyStackTraceDecl debugStack("verifying protocol conformance", decl);
@@ -1852,11 +1895,49 @@ struct ASTNodeBase {};
                 << "\n";
             abort();
           }
+
+          // Check the witness substitutions.
+          const auto &witness = normal->getWitness(req, nullptr);
+
+          if (witness.requiresSubstitution()) {
+            GenericEnv.push_back(witness.getSyntheticEnvironment());
+            for (const auto &sub : witness.getSubstitutions()) {
+              verifyChecked(sub.getReplacement());
+            }
+            assert(GenericEnv.back() == witness.getSyntheticEnvironment());
+            GenericEnv.pop_back();
+          }
+
           continue;
         }
       }
     }
-    
+
+    void verifyGenericEnvironment(Decl *D,
+                                  GenericSignature *sig,
+                                  GenericEnvironment *env) {
+      if (!sig && !env)
+        return;
+
+      if (sig && env) {
+        for (auto *paramTy : sig->getGenericParams()) {
+          (void)env->mapTypeIntoContext(paramTy);
+        }
+
+        return;
+      }
+
+      Out << "Decl must have both signature and environment, or neither\n";
+      D->dump(Out);
+      abort();
+    }
+
+    void verifyChecked(GenericTypeDecl *generic) {
+      verifyGenericEnvironment(generic,
+                               generic->getGenericSignature(),
+                               generic->getGenericEnvironment());
+    }
+
     void verifyChecked(NominalTypeDecl *nominal) {
       // Make sure that the protocol list is fully expanded.
       verifyProtocolList(nominal, nominal->getLocalProtocols());
@@ -1940,7 +2021,7 @@ struct ASTNodeBase {};
           CD->getDeclContext()->getDeclaredInterfaceType()->getAnyNominal() 
             != Ctx.getImplicitlyUnwrappedOptionalDecl()) {
         OptionalTypeKind resultOptionality = OTK_None;
-        CD->getResultType()->getAnyOptionalObjectType(resultOptionality);
+        CD->getResultInterfaceType()->getAnyOptionalObjectType(resultOptionality);
         if (resultOptionality != CD->getFailability()) {
           Out << "Initializer has result optionality/failability mismatch\n";
           CD->dump(llvm::errs());
@@ -1983,195 +2064,6 @@ struct ASTNodeBase {};
       verifyParsedBase(DD);
     }
 
-    bool checkAllArchetypes(const GenericParamList *generics) {
-      ArrayRef<ArchetypeType*> storedArchetypes = generics->getAllArchetypes();
-
-      SmallVector<ArchetypeType*, 16> derivedBuffer;
-      ArrayRef<ArchetypeType*> derivedArchetypes =
-        GenericParamList::deriveAllArchetypes(generics->getParams(),
-                                              derivedBuffer);
-
-      return (storedArchetypes == derivedArchetypes);
-    }
-
-    /// Check that the generic requirements line up with the archetypes.
-    void checkGenericRequirements(Decl *decl,
-                                  DeclContext *dc,
-                                  GenericFunctionType *genericTy) {
-
-      PrettyStackTraceDecl debugStack("verifying generic requirements", decl);
-
-      // We need to have generic parameters here.
-      auto genericParams = dc->getGenericParamsOfContext();
-      if (!genericParams) {
-        Out << "Missing generic parameters\n";
-        decl->dump(Out);
-        abort();
-      }
-
-      // Verify that the list of all archetypes matches what we would
-      // derive from the generic params.
-      if (!checkAllArchetypes(genericParams)) {
-        Out << "Archetypes list in generic parameter list doesn't "
-               "match what would have been derived\n";
-        decl->dump(Out);
-        abort();
-      }
-
-      // Step through the list of requirements in the generic type.
-      auto requirements = genericTy->getRequirements();
-
-      // Skip over same-type requirements.
-      auto skipUnrepresentedRequirements = [&]() {
-        for (; !requirements.empty(); requirements = requirements.slice(1)) {
-          bool done = false;
-          switch (requirements.front().getKind()) {
-          case RequirementKind::Conformance:
-            // If the second type is a protocol type, we're done.
-            done = true;
-            break;
-
-          case RequirementKind::Superclass:
-            break;
-
-          case RequirementKind::SameType:
-            // Skip the next same-type constraint.
-            continue;
-
-          case RequirementKind::WitnessMarker:
-            done = true;
-            break;
-          }
-
-          if (done)
-            break;
-        }
-      };
-      skipUnrepresentedRequirements();
-
-      // Collect all of the generic parameter lists.
-      SmallVector<GenericParamList *, 4> allGenericParamLists;
-      for (auto gpList = genericParams; gpList;
-           gpList = gpList->getOuterParameters()) {
-        allGenericParamLists.push_back(gpList);
-      }
-      std::reverse(allGenericParamLists.begin(), allGenericParamLists.end());
-
-      // Helpers that diagnose failures when generic requirements mismatch.
-      bool failed = false;
-      auto noteFailure =[&]() {
-        if (failed)
-          return;
-
-        Out << "Generic requirements don't match all archetypes\n";
-        decl->dump(Out);
-
-        Out << "\nGeneric type: " << genericTy->getString() << "\n";
-        Out << "Expected requirements: ";
-        bool first = true;
-        for (auto gpList : allGenericParamLists) {
-          for (auto archetype : gpList->getAllArchetypes()) {
-            for (auto proto : archetype->getConformsTo()) {
-              if (first)
-                first = false;
-              else
-                Out << ", ";
-
-              Out << archetype->getString() << " : "
-                  << proto->getDeclaredType()->getString();
-            }
-          }
-        }
-        Out << "\n";
-
-        failed = true;
-      };
-
-      // Walk through all of the archetypes in the generic parameter lists,
-      // matching up their conformance requirements with those in the
-      for (auto gpList : allGenericParamLists) {
-        for (auto archetype : gpList->getAllArchetypes()) {
-          // Make sure we have the value witness marker.
-          if (requirements.empty()) {
-            noteFailure();
-            Out << "Ran out of requirements before we ran out of archetypes\n";
-            break;
-          }
-
-          if (requirements.front().getKind()
-                == RequirementKind::WitnessMarker) {
-            auto type = ArchetypeBuilder::mapTypeIntoContext(
-                          dc,
-                          requirements.front().getFirstType());
-            if (type->isEqual(archetype)) {
-              requirements = requirements.slice(1);
-              skipUnrepresentedRequirements();
-            } else {
-              noteFailure();
-              Out << "Value witness marker for " << type->getString()
-                  << " does not match expected " << archetype->getString()
-                  << "\n";
-            }
-          } else {
-            noteFailure();
-            Out << "Missing value witness marker for "
-                << archetype->getString() << "\n";
-          }
-
-          for (auto proto : archetype->getConformsTo()) {
-            // If there are no requirements left, we're missing requirements.
-            if (requirements.empty()) {
-              noteFailure();
-              Out << "No requirement for " << archetype->getString()
-                  << " : " << proto->getDeclaredType()->getString() << "\n";
-              continue;
-            }
-
-            auto firstReqType = ArchetypeBuilder::mapTypeIntoContext(
-                                  dc,
-                                  requirements.front().getFirstType());
-            auto secondReqType = ArchetypeBuilder::mapTypeIntoContext(
-                                  dc,
-                                  requirements.front().getSecondType());
-
-            // If the requirements match up, move on to the next requirement.
-            if (firstReqType->isEqual(archetype) &&
-                secondReqType->isEqual(proto->getDeclaredType())) {
-              requirements = requirements.slice(1);
-              skipUnrepresentedRequirements();
-              continue;
-            }
-
-            noteFailure();
-
-            // If the requirements don't match up, complain.
-            if (!firstReqType->isEqual(archetype)) {
-              Out << "Mapped archetype " << firstReqType->getString()
-                  << " does not match expected " << archetype->getString()
-                  << "\n";
-              continue;
-            }
-
-            Out << "Mapped conformance " << secondReqType->getString()
-                << " does not match expected "
-                << proto->getDeclaredType()->getString() << "\n";
-          }
-        }
-      }
-
-      if (!requirements.empty()) {
-        noteFailure();
-        Out << "Extra requirement "
-            << requirements.front().getFirstType()->getString()
-            << " : "
-            << requirements.front().getSecondType()->getString()
-            << "\n";
-      }
-
-      if (failed)
-        abort();
-    }
-
     void verifyChecked(AbstractFunctionDecl *AFD) {
       PrettyStackTraceDecl debugStack("verifying AbstractFunctionDecl", AFD);
 
@@ -2205,25 +2097,26 @@ struct ASTNodeBase {};
         }
       }
 
-      // If this function is generic or is within a generic type, it should
+      // If this function is generic or is within a generic context, it should
       // have an interface type.
-      if ((AFD->getGenericParams() ||
-           (AFD->getDeclContext()->isTypeContext() &&
-            AFD->getDeclContext()->getGenericParamsOfContext()))
-          && !AFD->getInterfaceType()->is<GenericFunctionType>()) {
-        Out << "Missing interface type for generic function\n";
+      if (AFD->isGenericContext() !=
+          AFD->getInterfaceType()->is<GenericFunctionType>()) {
+        Out << "Functions in generic context must have an interface type\n";
         AFD->dump(Out);
         abort();
       }
 
       // If the function has a generic interface type, it should also have a
       // generic signature.
-      if (AFD->getInterfaceType()->is<GenericFunctionType>() !=
-          (AFD->getGenericSignature() != nullptr)) {
-        Out << "Missing generic signature for generic function\n";
+      if (AFD->isGenericContext() != AFD->isValidGenericContext()) {
+        Out << "Functions in generic context must have a generic signature\n";
         AFD->dump(Out);
         abort();
       }
+
+      verifyGenericEnvironment(AFD,
+                               AFD->getGenericSignature(),
+                               AFD->getGenericEnvironment());
 
       // If there is an interface type, it shouldn't have any unresolved
       // dependent member types.
@@ -2244,12 +2137,6 @@ struct ASTNodeBase {};
         Out << "Unresolved dependent member type ";
         unresolvedDependentTy->print(Out);
         abort();
-      }
-
-      // If the interface type is generic, make sure its requirements
-      // line up with the archetypes.
-      if (auto genericTy = interfaceTy->getAs<GenericFunctionType>()) {
-        checkGenericRequirements(AFD, AFD, genericTy);
       }
 
       // Throwing @objc methods must have a foreign error convention.
@@ -2278,8 +2165,8 @@ struct ASTNodeBase {};
 
       // If a decl has the Throws bit set, the function type should throw,
       // and vice versa.
-      auto fnTy = AFD->getType()->castTo<AnyFunctionType>();
-      for (unsigned i = 1, e = AFD->getNaturalArgumentCount(); i != e; ++i)
+      auto fnTy = AFD->getInterfaceType()->castTo<AnyFunctionType>();
+      for (unsigned i = 1, e = AFD->getNumParameterLists(); i != e; ++i)
         fnTy = fnTy->getResult()->castTo<AnyFunctionType>();
 
       if (AFD->hasThrows() != fnTy->getExtInfo().throws()) {
@@ -2603,7 +2490,7 @@ struct ASTNodeBase {};
     }
 
     Type checkExceptionTypeExists(const char *where) {
-      auto exn = Ctx.getErrorProtocolDecl();
+      auto exn = Ctx.getErrorDecl();
       if (exn) return exn->getDeclaredType();
 
       Out << "exception type does not exist in " << where << "\n";
@@ -2864,9 +2751,9 @@ struct ASTNodeBase {};
     void checkErrors(ValueDecl *D) {
       PrettyStackTraceDecl debugStack("verifying errors", D);
 
-      if (!D->hasType())
+      if (!D->hasInterfaceType())
         return;
-      if (D->getType()->is<ErrorType>() && !D->isInvalid()) {
+      if (D->getInterfaceType()->hasError() && !D->isInvalid()) {
         Out << "Valid decl has error type!\n";
         D->dump(Out);
         abort();

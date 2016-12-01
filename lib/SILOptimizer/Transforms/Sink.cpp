@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -66,19 +66,6 @@ public:
     // stack allocations.
     if (II->isAllocatingStack() || II->isDeallocatingStack())
       return false;
-
-    // We don't sink open_existential_* instructions, because
-    // there may be some instructions depending on them, e.g.
-    // metatype_inst, etc. But this kind of dependency
-    // cannot be expressed in SIL yet.
-    switch (II->getKind()) {
-    default: break;
-    case ValueKind::OpenExistentialBoxInst:
-    case ValueKind::OpenExistentialRefInst:
-    case ValueKind::OpenExistentialAddrInst:
-    case ValueKind::OpenExistentialMetatypeInst:
-      return false;
-    }
 
     SILBasicBlock *CurrentBlock = II->getParent();
     SILBasicBlock *Dest = nullptr;

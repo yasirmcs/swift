@@ -5,26 +5,26 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
 @_exported
 import ObjectiveC
+import _SwiftObjectiveCOverlayShims
 
 //===----------------------------------------------------------------------===//
 // Objective-C Primitive Types
 //===----------------------------------------------------------------------===//
 
-public typealias Boolean = Swift.Boolean
 /// The Objective-C BOOL type.
 ///
 /// On 64-bit iOS, the Objective-C BOOL type is a typedef of C/C++
 /// bool. Elsewhere, it is "signed char". The Clang importer imports it as
 /// ObjCBool.
 @_fixed_layout
-public struct ObjCBool : Boolean, BooleanLiteralConvertible {
+public struct ObjCBool : ExpressibleByBooleanLiteral {
 #if os(OSX) || (os(iOS) && (arch(i386) || arch(arm)))
   // On OS X and 32-bit iOS, Objective-C's BOOL type is a "signed char".
   var _value: Int8
@@ -39,7 +39,7 @@ public struct ObjCBool : Boolean, BooleanLiteralConvertible {
 
 #else
   // Everywhere else it is C/C++'s "Bool"
-  var _value : Bool
+  var _value: Bool
 
   public init(_ value: Bool) {
     self._value = value
@@ -85,7 +85,7 @@ func _convertBoolToObjCBool(_ x: Bool) -> ObjCBool {
 
 public // COMPILER_INTRINSIC
 func _convertObjCBoolToBool(_ x: ObjCBool) -> Bool {
-  return Bool(x)
+  return x.boolValue
 }
 
 /// The Objective-C SEL type.
@@ -96,8 +96,8 @@ func _convertObjCBoolToBool(_ x: ObjCBool) -> Bool {
 ///
 /// The compiler has special knowledge of this type.
 @_fixed_layout
-public struct Selector : StringLiteralConvertible {
-  var ptr : OpaquePointer
+public struct Selector : ExpressibleByStringLiteral {
+  var ptr: OpaquePointer
 
   /// Create a selector from a string.
   public init(_ str : String) {
@@ -171,7 +171,7 @@ extension Selector : CustomReflectable {
 
 @_fixed_layout
 public struct NSZone {
-  var pointer : OpaquePointer
+  var pointer: OpaquePointer
 }
 
 // Note: NSZone becomes Zone in Swift 3.
@@ -181,18 +181,12 @@ typealias Zone = NSZone
 // @autoreleasepool substitute
 //===----------------------------------------------------------------------===//
 
-@_silgen_name("_swift_objc_autoreleasePoolPush")
-func __pushAutoreleasePool() -> OpaquePointer
-
-@_silgen_name("_swift_objc_autoreleasePoolPop")
-func __popAutoreleasePool(_ pool: OpaquePointer)
-
 public func autoreleasepool<Result>(
-  _ body: @noescape () throws -> Result
+  invoking body: () throws -> Result
 ) rethrows -> Result {
-  let pool = __pushAutoreleasePool()
+  let pool = _swift_objc_autoreleasePoolPush()
   defer {
-    __popAutoreleasePool(pool)
+    _swift_objc_autoreleasePoolPop(pool)
   }
   return try body()
 }
@@ -208,23 +202,6 @@ public var YES: ObjCBool {
 @available(*, unavailable, message: "Use 'Bool' value 'false' instead")
 public var NO: ObjCBool {
   fatalError("can't retrieve unavailable property")
-}
-
-// FIXME: We can't make the fully-generic versions @_transparent due to
-// rdar://problem/19418937, so here are some @_transparent overloads
-// for ObjCBool
-@_transparent
-public func && <T : Boolean>(
-  lhs: T, rhs: @autoclosure () -> ObjCBool
-) -> Bool {
-  return lhs.boolValue ? rhs().boolValue : false
-}
-
-@_transparent
-public func || <T : Boolean>(
-  lhs: T, rhs: @autoclosure () -> ObjCBool
-) -> Bool {
-  return lhs.boolValue ? true : rhs().boolValue
 }
 
 //===----------------------------------------------------------------------===//
@@ -243,7 +220,7 @@ extension NSObject : Equatable, Hashable {
   /// - Note: the hash value is not guaranteed to be stable across
   ///   different invocations of the same program.  Do not persist the
   ///   hash value across program runs.
-  public var hashValue: Int {
+  open var hashValue: Int {
     return hash
   }
 }

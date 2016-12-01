@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -32,8 +32,12 @@
 #include "clang/Lex/Lexer.h"
 #include "clang/Lex/MacroInfo.h"
 #include "clang/Lex/Preprocessor.h"
+#include <algorithm>
+#include <memory>
 #include <queue>
+#include <string>
 #include <utility>
+#include <vector>
 
 using namespace swift;
 
@@ -145,6 +149,40 @@ getUnderlyingClangModuleForImport(ImportDecl *Import) {
       return ClangMod;
 
   return nullptr;
+}
+
+static void printTypeNameToString(Type Ty, std::string &Text) {
+  SmallString<128> Buffer;
+  llvm::raw_svector_ostream OS(Buffer);
+  Ty->print(OS);
+  Text = OS.str();
+}
+
+bool swift::ide::
+printTypeInterface(ModuleDecl *M, Type Ty, ASTPrinter &Printer,
+                   std::string &TypeName, std::string &Error) {
+  if (!Ty) {
+    if (Error.empty())
+      Error = "type cannot be null.";
+    return true;
+  }
+  Ty = Ty->getRValueType();
+  if (auto ND = Ty->getNominalOrBoundGenericNominal()) {
+    PrintOptions Options = PrintOptions::printTypeInterface(Ty.getPointer());
+    ND->print(Printer, Options);
+    printTypeNameToString(Ty, TypeName);
+    return false;
+  }
+  Error = "cannot find declaration of type.";
+  return true;
+}
+
+bool swift::ide::
+printTypeInterface(ModuleDecl *M, StringRef TypeUSR, ASTPrinter &Printer,
+                   std::string &TypeName, std::string &Error) {
+  return printTypeInterface(M, getTypeFromMangledSymbolname(M->getASTContext(),
+                                                            TypeUSR, Error),
+                            Printer, TypeName, Error);
 }
 
 void swift::ide::printModuleInterface(Module *M, Optional<StringRef> Group,
@@ -535,13 +573,10 @@ void swift::ide::printSubmoduleInterface(
                 AdjustedOptions.BracketOptions = {ET.first, false,
                                         Decls.back().first == ET.first, true};
                 if (ET.second)
-                  AdjustedOptions.
-                    initArchetypeTransformerForSynthesizedExtensions(NTD,
-                                                               pAnalyzer.get());
+                  AdjustedOptions.initForSynthesizedExtension(NTD);
                 ET.first->print(Printer, AdjustedOptions);
                 if (ET.second)
-                  AdjustedOptions.
-                    clearArchetypeTransformerForSynthesizedExtensions();
+                  AdjustedOptions.clearSynthesizedExtension();
                 if (AdjustedOptions.BracketOptions.shouldCloseExtension(ET.first))
                   Printer << "\n";
               }
@@ -568,13 +603,10 @@ void swift::ide::printSubmoduleInterface(
                 if (AdjustedOptions.BracketOptions.shouldOpenExtension(ET.first))
                   Printer << "\n";
                 if (ET.second)
-                  AdjustedOptions.
-                    initArchetypeTransformerForSynthesizedExtensions(NTD,
-                                                               pAnalyzer.get());
+                  AdjustedOptions.initForSynthesizedExtension(NTD);
                 ET.first->print(Printer, AdjustedOptions);
                 if (ET.second)
-                  AdjustedOptions.
-                    clearArchetypeTransformerForSynthesizedExtensions();
+                  AdjustedOptions.clearSynthesizedExtension();
                 if (AdjustedOptions.BracketOptions.shouldCloseExtension(ET.first))
                   Printer << "\n";
             }

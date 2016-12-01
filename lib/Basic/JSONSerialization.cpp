@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -260,6 +260,13 @@ void ScalarTraits<uint32_t>::output(const uint32_t &Val,
                                     raw_ostream &Out) {
   Out << Val;
 }
+
+#if defined(_MSC_VER)
+void ScalarTraits<unsigned long>::output(const unsigned long &Val,
+                                         raw_ostream &Out) {
+  Out << Val;
+}
+#endif
 
 void ScalarTraits<uint64_t>::output(const uint64_t &Val,
                                     raw_ostream &Out) {

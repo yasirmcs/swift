@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -60,12 +60,6 @@ public:
       return checkPattern(Pat->getSemanticsProvidingPattern(), Reason);
     case PatternKind::Named:
       return checkValueDecl(cast<NamedPattern>(Pat)->getDecl(), Reason);
-
-    case PatternKind::NominalType: {
-      for (auto &elt : cast<NominalTypePattern>(Pat)->getElements())
-        checkPattern(elt.getSubPattern(), Reason);
-      return;
-    }
     case PatternKind::EnumElement: {
       auto *OP = cast<EnumElementPattern>(Pat);
       if (OP->hasSubPattern())

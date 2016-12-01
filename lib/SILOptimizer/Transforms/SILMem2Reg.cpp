@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -156,7 +156,7 @@ class MemoryToRegisters {
   SILBuilder B;
 
   /// \brief Check if the AllocStackInst \p ASI is only written into.
-  bool isWriteOnlyAllocation(AllocStackInst *ASI, bool Promoted = false);
+  bool isWriteOnlyAllocation(AllocStackInst *ASI);
 
   /// \brief Promote all of the AllocStacks in a single basic block in one
   /// linear scan. Note: This function deletes all of the users of the
@@ -242,8 +242,7 @@ static bool isCaptured(AllocStackInst *ASI, bool &inSingleBlock) {
 }
 
 /// Returns true if the AllocStack is only stored into.
-bool MemoryToRegisters::isWriteOnlyAllocation(AllocStackInst *ASI,
-                                              bool Promoted) {
+bool MemoryToRegisters::isWriteOnlyAllocation(AllocStackInst *ASI) {
   // For all users of the AllocStack:
   for (auto UI = ASI->use_begin(), E = ASI->use_end(); UI != E; ++UI) {
     SILInstruction *II = UI->getUser();
@@ -259,14 +258,8 @@ bool MemoryToRegisters::isWriteOnlyAllocation(AllocStackInst *ASI,
 
     // If we haven't already promoted the AllocStack, we may see
     // DebugValueAddr uses.
-    if (!Promoted && isa<DebugValueAddrInst>(II))
+    if (isa<DebugValueAddrInst>(II))
       continue;
-
-    // Destroys of loadable types can be rewritten as releases, so
-    // they are fine.
-    if (auto *DAI = dyn_cast<DestroyAddrInst>(II))
-      if (!Promoted && DAI->getOperand()->getType().isLoadable(DAI->getModule()))
-        continue;
 
     // Can't do anything else with it.
     DEBUG(llvm::dbgs() << "*** AllocStack has non-write use: " << *II);
@@ -354,8 +347,8 @@ static void replaceDestroy(DestroyAddrInst *DAI, SILValue NewValue) {
 
   auto Ty = DAI->getOperand()->getType();
   auto &TL = DAI->getModule().getTypeLowering(Ty);
-  TL.emitLoweredReleaseValue(Builder, DAI->getLoc(), NewValue,
-                             Lowering::TypeLowering::LoweringStyle::DeepNoEnum);
+  TL.emitLoweredDestroyValue(Builder, DAI->getLoc(), NewValue,
+                             Lowering::TypeLowering::LoweringStyle::Deep);
   DAI->eraseFromParent();
 }
 
@@ -518,10 +511,8 @@ void MemoryToRegisters::removeSingleBlockAllocation(AllocStackInst *ASI) {
 void StackAllocationPromoter::addBlockArguments(BlockSet &PhiBlocks) {
   DEBUG(llvm::dbgs() << "*** Adding new block arguments.\n");
 
-  SILModule &M = ASI->getModule();
-
-  for (auto Block : PhiBlocks)
-    new (M) SILArgument(Block, ASI->getElementType());
+  for (auto *Block : PhiBlocks)
+    Block->createArgument(ASI->getElementType());
 }
 
 SILValue
@@ -544,7 +535,7 @@ StackAllocationPromoter::getLiveOutValue(BlockSet &PhiBlocks,
     if (PhiBlocks.count(BB)) {
       // Return the dummy instruction that represents the new value that we will
       // add to the basic block.
-      SILValue Phi = BB->getBBArg(BB->getNumBBArg()-1);
+      SILValue Phi = BB->getArgument(BB->getNumArguments() - 1);
       DEBUG(llvm::dbgs() << "*** Found a dummy Phi def " << *Phi);
       return Phi;
     }
@@ -565,7 +556,7 @@ StackAllocationPromoter::getLiveInValue(BlockSet &PhiBlocks,
   // chain.
   if (PhiBlocks.count(BB)) {
     DEBUG(llvm::dbgs() << "*** Found a local Phi definition.\n");
-    return BB->getBBArg(BB->getNumBBArg()-1);
+    return BB->getArgument(BB->getNumArguments() - 1);
   }
 
   if (BB->pred_empty() || !DT->getNode(BB))
@@ -651,8 +642,9 @@ void StackAllocationPromoter::fixBranchesAndUses(BlockSet &PhiBlocks) {
   // For each Block with a new Phi argument:
   for (auto Block : PhiBlocks) {
     // Fix all predecessors.
-    for (auto PBBI = Block->getPreds().begin(), E = Block->getPreds().end();
-        PBBI != E;) {
+    for (auto PBBI = Block->getPredecessorBlocks().begin(),
+              E = Block->getPredecessorBlocks().end();
+         PBBI != E;) {
       auto *PBB = *PBBI;
       ++PBBI;
       assert(PBB && "Invalid block!");
@@ -874,8 +866,7 @@ bool MemoryToRegisters::run() {
       StackAllocationPromoter(ASI, DT, DomTreeLevels, B).run();
 
       // Make sure that all of the allocations were promoted into registers.
-      assert(isWriteOnlyAllocation(ASI, /* Promoted =*/ true) &&
-             "Non-write uses left behind");
+      assert(isWriteOnlyAllocation(ASI) && "Non-write uses left behind");
       // ... and erase the allocation.
       eraseUsesOfInstruction(ASI);
 

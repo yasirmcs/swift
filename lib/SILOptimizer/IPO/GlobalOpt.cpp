@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -197,6 +197,7 @@ static SILFunction *genGetterFromInit(StoreInst *Store,
   auto *varDecl = SILG->getDecl();
 
   Mangle::Mangler getterMangler;
+  getterMangler.append("_T");
   getterMangler.mangleGlobalGetterEntity(varDecl);
   auto getterName = getterMangler.finalize();
 
@@ -231,10 +232,12 @@ static SILFunction *genGetterFromInit(StoreInst *Store,
       ParameterConvention::Direct_Owned, { }, Results, None,
       Store->getModule().getASTContext());
   auto *GetterF = Store->getModule().getOrCreateFunction(Store->getLoc(),
-      getterName, SILLinkage::PrivateExternal, LoweredType,
+      getterName, SILLinkage::Private, LoweredType,
       IsBare_t::IsBare, IsTransparent_t::IsNotTransparent,
       IsFragile_t::IsFragile);
   GetterF->setDebugScope(Store->getFunction()->getDebugScope());
+  if (Store->getFunction()->hasUnqualifiedOwnership())
+    GetterF->setUnqualifiedOwnership();
   auto *EntryBB = GetterF->createBasicBlock();
   // Copy instructions into GetterF
   InstructionsCloner Cloner(*GetterF, Insns, EntryBB);
@@ -468,6 +471,7 @@ static SILFunction *genGetterFromInit(SILFunction *InitF, VarDecl *varDecl) {
   // Generate a getter from the global init function without side-effects.
 
   Mangle::Mangler getterMangler;
+  getterMangler.append("_T");
   getterMangler.mangleGlobalGetterEntity(varDecl);
   auto getterName = getterMangler.finalize();
 
@@ -484,9 +488,11 @@ static SILFunction *genGetterFromInit(SILFunction *InitF, VarDecl *varDecl) {
       ParameterConvention::Direct_Owned, { }, Results, None,
       InitF->getASTContext());
   auto *GetterF = InitF->getModule().getOrCreateFunction(InitF->getLocation(),
-     getterName, SILLinkage::PrivateExternal, LoweredType,
+     getterName, SILLinkage::Private, LoweredType,
       IsBare_t::IsBare, IsTransparent_t::IsNotTransparent,
       IsFragile_t::IsFragile);
+  if (InitF->hasUnqualifiedOwnership())
+    GetterF->setUnqualifiedOwnership();
 
   auto *EntryBB = GetterF->createBasicBlock();
   // Copy InitF into GetterF
@@ -740,13 +746,16 @@ static bool canBeChangedExternally(SILGlobalVariable *SILG) {
   // Use access specifiers from the declarations,
   // if possible.
   if (auto *Decl = SILG->getDecl()) {
-    auto Access = Decl->getFormalAccess();
-    if (Access == Accessibility::Private)
+    switch (Decl->getEffectiveAccess()) {
+    case Accessibility::Private:
+    case Accessibility::FilePrivate:
       return false;
-    if (Access == Accessibility::Internal &&
-        SILG->getModule().isWholeModule())
-      return false;
-    return true;
+    case Accessibility::Internal:
+      return !SILG->getModule().isWholeModule();
+    case Accessibility::Public:
+    case Accessibility::Open:
+      return true;
+    }
   }
 
   if (SILG->getLinkage() == SILLinkage::Private)

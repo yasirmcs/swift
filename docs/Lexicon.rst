@@ -13,14 +13,16 @@ source code, tests, and commit messages. See also the `LLVM lexicon`_.
 .. note::
 
     This document uses Sphinx-specific features. If you are viewing this on
-    GitHub, you'll have to use raw mode, or download and build the docs 
+    GitHub, you'll have to use raw mode, or download and build the docs
     yourself.
 
 .. glossary::
 
   archetype
     A placeholder for a generic parameter or an associated type within a
-    generic context.
+    generic context. Sometimes known as a "rigid type variable" in formal
+    CS literature. Directly stores its conforming protocols and nested
+    archetypes, if any.
 
   canonical SIL
     SIL after the
@@ -37,12 +39,27 @@ source code, tests, and commit messages. See also the `LLVM lexicon`_.
     protocol. Represented in the compiler by the ProtocolConformance type at
     the AST level. See also `witness table`.
 
+  contextual type
+    1. The expected type for a Swift sub-expression based on the rest of the
+       statement. For example, in the statement ``print(6 * 9)``, the contextual
+       type of the expression ``6 * 9`` is ``Any``.
+    2. The type of a value or declaration from inside a potentially generic
+       context. This type may contain `archetypes <archetype>` and cannot be
+       used directly from outside the context. Compare with `interface type`.
+
   DI (definite initialization / definitive initialization)
     The feature that no uninitialized variables, constants, or properties will
     be read by a program, or the analysis pass that operates on SIL to
     guarantee this. This was `discussed on Apple's Swift blog`__.
-    
+
     __ https://developer.apple.com/swift/blog/?id=28
+
+  dup
+    From "duplicate". As a noun, refers to another filed issue that describes
+    the same bug ("I have a dup of this"); as a verb, the act of marking a bug
+    *as* a duplicate ("Please dup this to the underlying issue"). Sometimes
+    written "dupe". Pronounced the same way as the first syllable of
+    "duplicate", which for most American English speakers is "doop".
 
   existential
     A value whose type is a protocol composition (including a single protocol
@@ -52,11 +69,36 @@ source code, tests, and commit messages. See also the `LLVM lexicon`_.
     Describes a type or function where making changes will break binary
     compatibility. See :doc:`LibraryEvolution.rst <LibraryEvolution>`.
 
+  iff
+    "`if and only if`__". This term comes from mathematics.
+
+    __ https://en.wikipedia.org/wiki/If_and_only_if
+
+  interface type
+    The type of a value or declaration outside its generic context. These types
+    are written using "formal" generic types, which only have meaning when
+    combined with a particular generic declaration's "generic signature".
+    Unlike `contextual types <contextual type>`, interface types store
+    conformances and requirements in the generic signature and not in the types
+    themselves. They can be compared across declarations but cannot be used
+    directly from within the context.
+
   IUO (implicitly unwrapped optional)
     A type like Optional, but it implicitly converts to its wrapped type. If
     the value is ``nil`` during such a conversion, the program traps just as
     it would when a normal Optional is force-unwrapped. IUOs implicitly
     convert to and from normal Optionals with the same wrapped type.
+
+  IWYU (include what you use)
+    The accepted wisdom that implementation files (``.cpp``, ``.c``, ``.m``,
+    ``.mm``) should explicitly ``#include`` or ``#import`` the headers they use.
+    Doing so prevents compilation errors when header files are included in a
+    different order, or when header files are modified to use forward
+    declarations instead of direct includes.
+
+  LGTM
+    "Looks good to me." Used in code review to indicate approval with no further
+    comments.
 
   main module
     The module for the file or files currently being compiled.
@@ -70,14 +112,14 @@ source code, tests, and commit messages. See also the `LLVM lexicon`_.
     The type of a value representing a type. Greg Parker has a good
     explanation of `Objective-C's "metaclasses"`__; because Swift has types
     that are *not* classes, a more general term is used.
-    
+
     We also sometimes refer to a value representing a type as a "metatype
     object" or just "metatype", usually within low-level contexts like IRGen
     and LLDB. This is technically incorrect (it's just a "type object"), but
     the malapropism happened early in the project and has stuck around.
-  
+
     __ http://sealiesoftware.com/blog/archive/2009/04/14/objc_explain_Classes_and_metaclasses.html
-    
+
   model
     A type that conforms to a particular protocol. Sometimes "concrete
     model". Example: "Array and Set are both models of CollectionType".
@@ -85,8 +127,8 @@ source code, tests, and commit messages. See also the `LLVM lexicon`_.
   module
     Has *many* uses in the Swift world. We may want to rename some of them.
     #1 and #2 are the most common.
-    
-    1. A unit of API distribution and grouping. The ``import`` declaration 
+
+    1. A unit of API distribution and grouping. The ``import`` declaration
        brings modules into scope. Represented as ModuleDecl in the compiler.
     2. A compilation unit; that is, source files that are compiled together.
        These files may contain cross-references. Represented as "the main
@@ -105,7 +147,7 @@ source code, tests, and commit messages. See also the `LLVM lexicon`_.
     7. Shorthand for a "precompiled module file"; effectively "precompiled
        headers" for an entire Clang module. Never used directly by Swift.
        See also `module cache`.
-    
+
     __ http://clang.llvm.org/docs/Modules.html
 
   module cache
@@ -125,7 +167,7 @@ source code, tests, and commit messages. See also the `LLVM lexicon`_.
     patches that change functionality.
 
   open existential
-    An `existential` value with its dynamic type pulled out, so that the 
+    An `existential` value with its dynamic type pulled out, so that the
     compiler can do something with it.
 
   overlay
@@ -135,10 +177,10 @@ source code, tests, and commit messages. See also the `LLVM lexicon`_.
     Apple has a number of overlays for its own SDKs in stdlib/public/SDK/.
 
   PR
-    1. "Problem Report": An issue reported in `LLVM's bug tracker`__. 
+    1. "Problem Report": An issue reported in `LLVM's bug tracker`__.
        See also `SR`.
     2. "pull request"
-    
+
     __ https://llvm.org/bugs/
 
   primary file
@@ -158,7 +200,7 @@ source code, tests, and commit messages. See also the `LLVM lexicon`_.
 
   Radar
     `Apple's bug-tracking system`__, or an issue reported on that system.
-    
+
     __ https://bugreport.apple.com
 
   raw SIL

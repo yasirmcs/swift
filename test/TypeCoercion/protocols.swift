@@ -1,4 +1,4 @@
-// RUN: %target-parse-verify-swift
+// RUN: %target-typecheck-verify-swift
 
 protocol MyPrintable {
   func print()
@@ -173,5 +173,5 @@ func testREPLPrintable() {
   doREPLPrint("foo")
 }
 
-// Boolean coercion
-if true as Boolean {}
+// Bool coercion
+if true as Bool {}

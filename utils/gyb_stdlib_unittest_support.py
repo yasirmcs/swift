@@ -5,12 +5,13 @@
 # Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 # Licensed under Apache License v2.0 with Runtime Library Exception
 #
-# See http://swift.org/LICENSE.txt for license information
-# See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+# See https://swift.org/LICENSE.txt for license information
+# See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 
-TRACE = '''_ message: @autoclosure () -> String = "",
-  showFrame: Bool = true,
+TRACE = '''
+  _ message: @autoclosure () -> String = "",
   stackTrace: SourceLocStack = SourceLocStack(),
+  showFrame: Bool = true,
   file: String = #file, line: UInt = #line'''
 
 stackTrace = 'stackTrace.pushIf(showFrame, file: file, line: line)'

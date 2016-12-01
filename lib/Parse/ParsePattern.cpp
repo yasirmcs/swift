@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -17,7 +17,6 @@
 #include "swift/Parse/CodeCompletionCallbacks.h"
 #include "swift/Parse/Parser.h"
 #include "swift/AST/ASTWalker.h"
-#include "swift/AST/ExprHandle.h"
 #include "swift/Basic/StringExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringMap.h"
@@ -26,11 +25,11 @@ using namespace swift;
 
 /// \brief Determine the kind of a default argument given a parsed
 /// expression that has not yet been type-checked.
-static DefaultArgumentKind getDefaultArgKind(ExprHandle *init) {
-  if (!init || !init->getExpr())
+static DefaultArgumentKind getDefaultArgKind(Expr *init) {
+  if (!init)
     return DefaultArgumentKind::None;
 
-  auto magic = dyn_cast<MagicIdentifierLiteralExpr>(init->getExpr());
+  auto magic = dyn_cast<MagicIdentifierLiteralExpr>(init);
   if (!magic)
     return DefaultArgumentKind::Normal;
 
@@ -48,36 +47,31 @@ static DefaultArgumentKind getDefaultArgKind(ExprHandle *init) {
   }
 }
 
-void Parser::DefaultArgumentInfo::setFunctionContext(DeclContext *DC) {
-  assert(DC->isLocalContext());
+void Parser::DefaultArgumentInfo::setFunctionContext(AbstractFunctionDecl *AFD){
   for (auto context : ParsedContexts) {
-    context->changeFunction(DC);
+    context->changeFunction(AFD);
   }
 }
 
 static ParserStatus parseDefaultArgument(Parser &P,
                                    Parser::DefaultArgumentInfo *defaultArgs,
                                    unsigned argIndex,
-                                   ExprHandle *&init,
+                                   Expr *&init,
                                  Parser::ParameterContextKind paramContext) {
   SourceLoc equalLoc = P.consumeToken(tok::equal);
 
   // Enter a fresh default-argument context with a meaningless parent.
   // We'll change the parent to the function later after we've created
   // that declaration.
-  auto initDC =
-    P.Context.createDefaultArgumentContext(P.CurDeclContext, argIndex);
+  auto initDC = new (P.Context) DefaultArgumentInitializer(P.CurDeclContext,
+                                                           argIndex);
   Parser::ParseFunctionBody initScope(P, initDC);
 
   ParserResult<Expr> initR = P.parseExpr(diag::expected_init_value);
 
-  // Give back the default-argument context if we didn't need it.
-  if (!initScope.hasClosures()) {
-    P.Context.destroyDefaultArgumentContext(initDC);
-
-  // Otherwise, record it if we're supposed to accept default
+  // Record the default-argument context if we're supposed to accept default
   // arguments here.
-  } else if (defaultArgs) {
+  if (defaultArgs) {
     defaultArgs->ParsedContexts.push_back(initDC);
   }
 
@@ -119,7 +113,7 @@ static ParserStatus parseDefaultArgument(Parser &P,
   if (initR.isNull())
     return makeParserError();
 
-  init = ExprHandle::get(P.Context, initR.get());
+  init = initR.get();
   return ParserStatus();
 }
 
@@ -177,8 +171,7 @@ Parser::parseParameterClause(SourceLoc &leftParenLoc,
 
     // Attributes.
     bool FoundCCToken;
-    parseDeclAttributeList(param.Attrs, FoundCCToken,
-                          /*stop at type attributes*/true, true);
+    parseDeclAttributeList(param.Attrs, FoundCCToken);
     if (FoundCCToken) {
       if (CodeCompletion) {
         CodeCompletion->completeDeclAttrKeyword(nullptr, isInSILMode(), true);
@@ -193,8 +186,7 @@ Parser::parseParameterClause(SourceLoc &leftParenLoc,
       if (!hasSpecifier) {
         if (Tok.is(tok::kw_let)) {
           diagnose(Tok, diag::parameter_let_as_attr)
-          .fixItRemove(Tok.getLoc());
-          param.isInvalid = true;
+            .fixItRemove(Tok.getLoc());
         } else {
           // We handle the var error in sema for a better fixit and inout is
           // handled later in this function for better fixits.
@@ -207,9 +199,8 @@ Parser::parseParameterClause(SourceLoc &leftParenLoc,
         // Redundant specifiers are fairly common, recognize, reject, and recover
         // from this gracefully.
         diagnose(Tok, diag::parameter_inout_var_let_repeated)
-        .fixItRemove(Tok.getLoc());
+          .fixItRemove(Tok.getLoc());
         consumeToken();
-        param.isInvalid = true;
       }
     }
 
@@ -245,35 +236,9 @@ Parser::parseParameterClause(SourceLoc &leftParenLoc,
         param.SecondNameLoc = SourceLoc();
       }
 
-      // (':' ('inout')? type)?
+      // (':' type)?
       if (consumeIf(tok::colon)) {
 
-        SourceLoc postColonLoc = Tok.getLoc();
-
-        bool hasDeprecatedInOut =
-          param.SpecifierKind == ParsedParameter::InOut;
-        bool hasValidInOut = false;
-        
-        while (Tok.is(tok::kw_inout)) {
-          hasValidInOut = true;
-          if (hasSpecifier) {
-            diagnose(Tok.getLoc(), diag::parameter_inout_var_let_repeated)
-            .fixItRemove(param.LetVarInOutLoc);
-            consumeToken(tok::kw_inout);
-            param.isInvalid = true;
-          } else {
-            hasSpecifier = true;
-            param.LetVarInOutLoc = consumeToken(tok::kw_inout);
-            param.SpecifierKind = ParsedParameter::InOut;
-          }
-        }
-        if (!hasValidInOut && hasDeprecatedInOut) {
-          diagnose(Tok.getLoc(), diag::inout_as_attr_disallowed)
-          .fixItRemove(param.LetVarInOutLoc)
-          .fixItInsert(postColonLoc, "inout ");
-          param.isInvalid = true;
-        }
-        
         auto type = parseType(diag::expected_parameter_type);
         status |= type;
         param.Type = type.getPtrOrNull();
@@ -305,14 +270,14 @@ Parser::parseParameterClause(SourceLoc &leftParenLoc,
         if (param.Type) {
           diagnose(typeStartLoc, diag::parameter_unnamed)
             .fixItInsert(typeStartLoc, "_: ");
-        } else {
-          param.isInvalid = true;
         }
       } else {
         // Otherwise, we're not sure what is going on, but this doesn't smell
         // like a parameter.
         diagnose(Tok, diag::expected_parameter_name);
         param.isInvalid = true;
+        param.FirstNameLoc = Tok.getLoc();
+        status.setIsParseError();
       }
     }
                         
@@ -329,7 +294,7 @@ Parser::parseParameterClause(SourceLoc &leftParenLoc,
       if (param.EllipsisLoc.isValid() && param.DefaultArg) {
         // The range of the complete default argument.
         SourceRange defaultArgRange;
-        if (auto init = param.DefaultArg->getExpr())
+        if (auto init = param.DefaultArg)
           defaultArgRange = SourceRange(param.EllipsisLoc, init->getEndLoc());
 
         diagnose(EqualLoc, diag::parameter_vararg_default)
@@ -387,9 +352,18 @@ mapParsedParameters(Parser &parser,
     // If a type was provided, create the type for the parameter.
     if (auto type = paramInfo.Type) {
       // If 'inout' was specified, turn the type into an in-out type.
-      if (specifierKind == Parser::ParsedParameter::InOut)
-        type = new (ctx) InOutTypeRepr(type, paramInfo.LetVarInOutLoc);
-
+      if (specifierKind == Parser::ParsedParameter::InOut) {
+        auto InOutLoc = paramInfo.LetVarInOutLoc;
+        if (isa<InOutTypeRepr>(type)) {
+          parser.diagnose(InOutLoc, diag::parameter_inout_var_let_repeated)
+            .fixItRemove(InOutLoc);
+        } else {
+          parser.diagnose(InOutLoc, diag::inout_as_attr_disallowed)
+            .fixItRemove(InOutLoc)
+            .fixItInsert(type->getStartLoc(), "inout ");
+          type = new (ctx) InOutTypeRepr(type, InOutLoc);
+        }
+      }
       param->getTypeLoc() = TypeLoc(type);
     } else if (paramContext != Parser::ParameterContextKind::Closure) {
       // Non-closure parameters require a type.
@@ -648,13 +622,42 @@ Parser::parseFunctionSignature(Identifier SimpleName,
   }
 
   SourceLoc arrowLoc;
+
+  auto diagnoseInvalidThrows = [&]() -> Optional<InFlightDiagnostic> {
+    if (throwsLoc.isValid())
+      return None;
+
+    if (Tok.is(tok::kw_throws)) {
+      throwsLoc = consumeToken();
+    } else if (Tok.is(tok::kw_rethrows)) {
+      throwsLoc = consumeToken();
+      rethrows = true;
+    }
+
+    if (!throwsLoc.isValid())
+      return None;
+
+    auto diag = rethrows ? diag::rethrows_in_wrong_position
+                         : diag::throws_in_wrong_position;
+    return diagnose(Tok, diag);
+  };
+
   // If there's a trailing arrow, parse the rest as the result type.
   if (Tok.isAny(tok::arrow, tok::colon)) {
     if (!consumeIf(tok::arrow, arrowLoc)) {
       // FixIt ':' to '->'.
       diagnose(Tok, diag::func_decl_expected_arrow)
-          .fixItReplace(SourceRange(Tok.getLoc()), "->");
+          .fixItReplace(Tok.getLoc(), " -> ");
       arrowLoc = consumeToken(tok::colon);
+    }
+
+    // Check for 'throws' and 'rethrows' after the arrow, but
+    // before the type, and correct it.
+    if (auto diagOpt = diagnoseInvalidThrows()) {
+      assert(arrowLoc.isValid());
+      assert(throwsLoc.isValid());
+      (*diagOpt).fixItExchange(SourceRange(arrowLoc),
+                               SourceRange(throwsLoc));
     }
 
     ParserResult<TypeRepr> ResultType =
@@ -672,26 +675,14 @@ Parser::parseFunctionSignature(Identifier SimpleName,
   }
 
   // Check for 'throws' and 'rethrows' after the type and correct it.
-  if (!throwsLoc.isValid()) {
-    if (Tok.is(tok::kw_throws)) {
-      throwsLoc = consumeToken();
-    } else if (Tok.is(tok::kw_rethrows)) {
-      throwsLoc = consumeToken();
-      rethrows = true;
-    }
-
-    if (throwsLoc.isValid()) {
-      assert(arrowLoc.isValid());
-      assert(retType);
-      auto diag = rethrows ? diag::rethrows_after_function_result
-                           : diag::throws_after_function_result;
-      SourceLoc typeEndLoc = Lexer::getLocForEndOfToken(SourceMgr,
-                                                        retType->getEndLoc());
-      SourceLoc throwsEndLoc = Lexer::getLocForEndOfToken(SourceMgr, throwsLoc);
-      diagnose(Tok, diag)
-        .fixItInsert(arrowLoc, rethrows ? "rethrows " : "throws ")
-        .fixItRemoveChars(typeEndLoc, throwsEndLoc);
-    }
+  if (auto diagOpt = diagnoseInvalidThrows()) {
+    assert(arrowLoc.isValid());
+    assert(retType);
+    SourceLoc typeEndLoc = Lexer::getLocForEndOfToken(SourceMgr,
+                                                      retType->getEndLoc());
+    SourceLoc throwsEndLoc = Lexer::getLocForEndOfToken(SourceMgr, throwsLoc);
+    (*diagOpt).fixItInsert(arrowLoc, rethrows ? "rethrows " : "throws ")
+              .fixItRemoveChars(typeEndLoc, throwsEndLoc);
   }
 
   return Status;
@@ -707,7 +698,7 @@ Parser::parseConstructorArguments(DeclName &FullName,
     {
       auto diag = diagnose(Tok, diag::expected_lparen_initializer);
       if (Tok.is(tok::l_brace))
-        diag.fixItInsert(Tok.getLoc(), "() ");
+        diag.fixItInsertAfter(PreviousLoc, "()");
     }
 
     // Create an empty parameter list to recover.
@@ -746,15 +737,52 @@ ParserResult<Pattern> Parser::parseTypedPattern() {
   auto result = parsePattern();
   
   // Now parse an optional type annotation.
-  if (consumeIf(tok::colon)) {
+  if (Tok.is(tok::colon)) {
+    SourceLoc colonLoc = consumeToken(tok::colon);
+    
     if (result.isNull())  // Recover by creating AnyPattern.
-      result = makeParserErrorResult(new (Context) AnyPattern(PreviousLoc));
+      result = makeParserErrorResult(new (Context) AnyPattern(colonLoc));
     
     ParserResult<TypeRepr> Ty = parseType();
     if (Ty.hasCodeCompletion())
       return makeParserCodeCompletionResult<Pattern>();
-    if (Ty.isNull())
+    if (!Ty.isNull()) {
+      // Attempt to diagnose initializer calls incorrectly written
+      // as typed patterns, such as "var x: [Int]()".
+      if (Tok.isFollowingLParen()) {
+        BacktrackingScope backtrack(*this);
+        
+        // Create a local context if needed so we can parse trailing closures.
+        LocalContext dummyContext;
+        Optional<ContextChange> contextChange;
+        if (!CurLocalContext) {
+          contextChange.emplace(*this, CurDeclContext, &dummyContext);
+        }
+        
+        SourceLoc lParenLoc, rParenLoc;
+        SmallVector<Expr *, 2> args;
+        SmallVector<Identifier, 2> argLabels;
+        SmallVector<SourceLoc, 2> argLabelLocs;
+        Expr *trailingClosure;
+        ParserStatus status = parseExprList(tok::l_paren, tok::r_paren,
+                                            /*isPostfix=*/true,
+                                            /*isExprBasic=*/false,
+                                            lParenLoc, args, argLabels,
+                                            argLabelLocs, rParenLoc,
+                                            trailingClosure);
+        if (status.isSuccess()) {
+          backtrack.cancelBacktrack();
+          
+          // Suggest replacing ':' with '='
+          diagnose(lParenLoc, diag::initializer_as_typed_pattern)
+            .highlight({Ty.get()->getStartLoc(), rParenLoc})
+            .fixItReplace(colonLoc, " = ");
+          result.setIsParseError();
+        }
+      }
+    } else {
       Ty = makeParserResult(new (Context) ErrorTypeRepr(PreviousLoc));
+    }
     
     result = makeParserResult(result,
                             new (Context) TypedPattern(result.get(), Ty.get()));
@@ -837,14 +865,8 @@ ParserResult<Pattern> Parser::parsePattern() {
 
 Pattern *Parser::createBindingFromPattern(SourceLoc loc, Identifier name,
                                           bool isLet) {
-  VarDecl *var;
-  if (ArgumentIsParameter) {
-    var = new (Context) ParamDecl(isLet, SourceLoc(), loc, name, loc, name,
-                                  Type(), CurDeclContext);
-  } else {
-    var = new (Context) VarDecl(/*static*/ false, /*IsLet*/ isLet,
-                                loc, name, Type(), CurDeclContext);
-  }
+  auto var = new (Context) VarDecl(/*static*/ false, /*IsLet*/ isLet,
+                                   loc, name, Type(), CurDeclContext);
   return new (Context) NamedPattern(var);
 }
 

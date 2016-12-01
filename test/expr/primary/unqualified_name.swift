@@ -1,4 +1,4 @@
-// RUN: %target-parse-verify-swift
+// RUN: %target-typecheck-verify-swift
 
 func f0(_ x: Int, y: Int, z: Int) { }
 func f1(_ x: Int, while: Int) { }
@@ -28,6 +28,13 @@ struct S0 {
     _ = self.f0(:y:z:) // expected-error{{an empty argument label is spelled with '_'}}{{17-17=_}}
     _ = self.f1(_:`while`:) // expected-warning{{keyword 'while' does not need to be escaped in argument list}}{{19-20=}}{{25-26=}}
     _ = self.f2(_:`let`:)
+
+    _ = f3(_:y:z:) // expected-error{{static member 'f3(_:y:z:)' cannot be used on instance of type 'S0'}}{{9-9=S0.}}
+  }
+
+  static func testStaticS0() {
+    _ = f0(_:y:z:)
+    _ = f3(_:y:z:)
   }
 
   static func f3(_ x: Int, y: Int, z: Int) -> S0 { return S0() }
@@ -40,7 +47,7 @@ class C0 {
   init(x: Int, y: Int, z: Int) { }
 
   convenience init(all: Int) {
-    self.init(x:y:z:)(x: all, y: all, z: all)
+    self.init(x:y:z:)(all, all, all)
   }
 
   func f0(_ x: Int, y: Int, z: Int) { }
@@ -50,7 +57,7 @@ class C0 {
 
 class C1 : C0 {
   init(all: Int) {
-    super.init(x:y:z:)(x: all, y: all, z: all)
+    super.init(x:y:z:)(all, all, all)
   }
 
   func testC0() {
@@ -66,3 +73,14 @@ class C1 : C0 {
   }
 }
 
+struct S1 {
+  init(x: Int) {} // expected-note {{'init(x:)' declared here}}
+
+  func testS1() {
+    _ = S1.init(x:)(1)
+    _ = S1.init(`x`: 1)  // expected-warning {{keyword 'x' does not need to be escaped in argument list}} {{17-18=}} {{19-20=}}
+
+    // Test for unknown token.
+    _ = S1.init(x: 0xG) // expected-error {{expected a digit after integer literal prefix}} expected-error {{missing argument for parameter 'x' in call}}
+  }
+}

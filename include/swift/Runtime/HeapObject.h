@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -107,12 +107,12 @@ struct TwoWordPair {
   // Use an enum class with implicit conversions so we don't dirty C callers
   // too much.
 #if __arm__ || __i386__ || defined(__CYGWIN__) || defined(_MSC_VER)
-#if defined(__CYGWIN__) || defined(_MSC_VER)
+#if defined(__CYGWIN__)
   enum class Return : unsigned __int128 {};
 #else
   enum class Return : unsigned long long {};
 #endif
-  
+
   operator Return() const {
     union {
       TwoWordPair value;
@@ -899,8 +899,8 @@ extern "C" void *swift_unknownWeakLoadStrong(WeakReference *ref);
 
 #else
 
-static inline void swift_unknownWeakLoadStrong(WeakReference *ref) {
-  swift_weakLoadStrong(ref);
+static inline void *swift_unknownWeakLoadStrong(WeakReference *ref) {
+  return static_cast<void *>(swift_weakLoadStrong(ref));
 }
 
 #endif /* SWIFT_OBJC_INTEROP */
@@ -918,8 +918,8 @@ extern "C" void *swift_unknownWeakTakeStrong(WeakReference *ref);
 
 #else
 
-static inline void swift_unknownWeakTakeStrong(WeakReference *ref) {
-  swift_weakTakeStrong(ref);
+static inline void *swift_unknownWeakTakeStrong(WeakReference *ref) {
+  return static_cast<void *>(swift_weakTakeStrong(ref));
 }
 
 #endif /* SWIFT_OBJC_INTEROP */
@@ -1155,6 +1155,11 @@ static inline void swift_unknownUnownedTakeAssign(UnownedReference *dest,
 
 #endif /* SWIFT_OBJC_INTEROP */
 
+/// Return the name of a Swift type represented by a metadata object.
+SWIFT_CC(swift) SWIFT_RUNTIME_EXPORT
+extern "C"
+TwoWordPair<const char *, uintptr_t>::Return
+swift_getTypeName(const Metadata *type, bool qualified);  
 
 } // end namespace swift
 

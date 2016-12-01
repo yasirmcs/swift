@@ -6,11 +6,13 @@
 # Usage:
 #   handle_swift_sources(sourcesvar externalvar)
 function(handle_swift_sources
-    dependency_target_out_var_name sourcesvar externalvar name)
+    dependency_target_out_var_name
+    dependency_module_target_out_var_name
+    sourcesvar externalvar name)
   cmake_parse_arguments(SWIFTSOURCES
       "IS_MAIN;IS_STDLIB;IS_STDLIB_CORE;IS_SDK_OVERLAY"
       "SDK;ARCHITECTURE;INSTALL_IN_COMPONENT"
-      "DEPENDS;API_NOTES;COMPILE_FLAGS"
+      "DEPENDS;API_NOTES;COMPILE_FLAGS;MODULE_NAME"
       ${ARGN})
   translate_flag(${SWIFTSOURCES_IS_MAIN} "IS_MAIN" IS_MAIN_arg)
   translate_flag(${SWIFTSOURCES_IS_STDLIB} "IS_STDLIB" IS_STDLIB_arg)
@@ -38,6 +40,7 @@ function(handle_swift_sources
 
   # Clear the result variable.
   set("${dependency_target_out_var_name}" "" PARENT_SCOPE)
+  set("${dependency_module_target_out_var_name}" "" PARENT_SCOPE)
 
   set(result)
   set(swift_sources)
@@ -54,18 +57,11 @@ function(handle_swift_sources
   if (NOT SWIFTSOURCES_IS_MAIN)
     list(APPEND swift_compile_flags "-module-link-name" "${name}")
   endif()
+  if("${SWIFTSOURCES_SDK}" STREQUAL "CYGWIN")
+    list(APPEND swift_compile_flags -DCYGWIN)
+  endif()
 
   if(swift_sources)
-    # Special-case hack to create Swift.o for the core standard library.
-    if(SWIFTSOURCES_IS_STDLIB_CORE)
-      set(swift_obj_base "Swift")
-    else()
-      # Otherwise, get the name from the first swift input file.  Also a hack!
-      # TODO: Fix it, <rdar://problem/17535693>.
-      list(GET swift_sources 0 swift_obj_base)
-      get_filename_component(swift_obj_base ${swift_obj_base} NAME_WE)
-    endif()
-
     compute_library_subdir(SWIFTSOURCES_LIBRARY_SUBDIR
       "${SWIFTSOURCES_SDK}" "${SWIFTSOURCES_ARCHITECTURE}")
     set(objsubdir "/${SWIFTSOURCES_LIBRARY_SUBDIR}")
@@ -73,7 +69,7 @@ function(handle_swift_sources
     file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}${objsubdir}")
 
     set(swift_obj
-        "${CMAKE_CURRENT_BINARY_DIR}${objsubdir}/${swift_obj_base}${CMAKE_C_OUTPUT_EXTENSION}")
+        "${CMAKE_CURRENT_BINARY_DIR}${objsubdir}/${SWIFTSOURCES_MODULE_NAME}${CMAKE_C_OUTPUT_EXTENSION}")
 
     # FIXME: We shouldn't /have/ to build things in a single process.
     # <rdar://problem/15972329>
@@ -85,6 +81,7 @@ function(handle_swift_sources
 
     _compile_swift_files(
         dependency_target
+        module_dependency_target
         OUTPUT ${swift_obj}
         SOURCES ${swift_sources}
         DEPENDS ${SWIFTSOURCES_DEPENDS}
@@ -92,6 +89,7 @@ function(handle_swift_sources
         SDK ${SWIFTSOURCES_SDK}
         ARCHITECTURE ${SWIFTSOURCES_ARCHITECTURE}
         API_NOTES ${SWIFTSOURCES_API_NOTES}
+        MODULE_NAME ${SWIFTSOURCES_MODULE_NAME}
         ${IS_MAIN_arg}
         ${IS_STDLIB_arg}
         ${IS_STDLIB_CORE_arg}
@@ -99,6 +97,7 @@ function(handle_swift_sources
         ${STATIC_arg}
         INSTALL_IN_COMPONENT "${SWIFTSOURCES_INSTALL_IN_COMPONENT}")
     set("${dependency_target_out_var_name}" "${dependency_target}" PARENT_SCOPE)
+    set("${dependency_module_target_out_var_name}" "${module_dependency_target}" PARENT_SCOPE)
     list(APPEND result ${swift_obj})
   endif()
 
@@ -136,12 +135,12 @@ endfunction()
 #     [OPT_FLAGS]                       # Optimization flags (overrides SWIFT_OPTIMIZE)
 #     [MODULE_DIR]                      # Put .swiftmodule, .swiftdoc., and .o
 #                                       # into this directory.
-#     [MODULE_NAME]                     # The module name. If not specified, the name
-#                                       # is derived from the output name
+#     [MODULE_NAME]                     # The module name.
 #     [IS_STDLIB]                       # Install produced files.
 #     [EMIT_SIB]                        # Emit the file as a sib file instead of a .o
 #     )
-function(_compile_swift_files dependency_target_out_var_name)
+function(_compile_swift_files
+         dependency_target_out_var_name dependency_module_target_out_var_name)
   cmake_parse_arguments(SWIFTFILE
     "IS_MAIN;IS_STDLIB;IS_STDLIB_CORE;IS_SDK_OVERLAY;EMIT_SIB"
     "OUTPUT;MODULE_NAME;INSTALL_IN_COMPONENT"
@@ -176,6 +175,13 @@ function(_compile_swift_files dependency_target_out_var_name)
 
   if("${SWIFTFILE_INSTALL_IN_COMPONENT}" STREQUAL "")
     message(FATAL_ERROR "INSTALL_IN_COMPONENT is required")
+  endif()
+
+  if ("${SWIFTFILE_MODULE_NAME}" STREQUAL "")
+    get_filename_component(SWIFTFILE_MODULE_NAME "${first_output}" NAME_WE)
+    message(SEND_ERROR
+      "No module name specified; did you mean to use MODULE_NAME "
+      "${SWIFTFILE_MODULE_NAME}?")
   endif()
 
   set(source_files)
@@ -225,6 +231,10 @@ function(_compile_swift_files dependency_target_out_var_name)
     list(APPEND swift_flags "-Xfrontend" "-enable-resilience")
   endif()
 
+  if(SWIFT_STDLIB_ENABLE_SIL_OWNERSHIP AND SWIFTFILE_IS_STDLIB)
+    list(APPEND swift_flags "-Xfrontend" "-enable-sil-ownership")
+  endif()
+
   if(SWIFT_EMIT_SORTED_SIL_OUTPUT)
     list(APPEND swift_flags "-Xfrontend" "-emit-sorted-sil")
   endif()
@@ -270,15 +280,9 @@ function(_compile_swift_files dependency_target_out_var_name)
   set(module_file)
   set(module_doc_file)
 
+  set(module_command)
   if(NOT SWIFTFILE_IS_MAIN)
     # Determine the directory where the module file should be placed.
-    if (SWIFTFILE_MODULE_NAME)
-      set(module_name "${SWIFTFILE_MODULE_NAME}")
-      list(APPEND swift_flags
-          "-module-name" "${module_name}")
-    else()
-      get_filename_component(module_name "${first_output}" NAME_WE)
-    endif()
     if(SWIFTFILE_MODULE_DIR)
       set(module_dir "${SWIFTFILE_MODULE_DIR}")
     elseif(SWIFTFILE_IS_STDLIB)
@@ -287,16 +291,15 @@ function(_compile_swift_files dependency_target_out_var_name)
       message(FATAL_ERROR "Don't know where to put the module files")
     endif()
 
+    list(APPEND swift_flags "-parse-as-library")
     if (NOT SWIFTFILE_EMIT_SIB)
       # Right now sib files seem to not be output when we emit a module. So
       # don't emit it.
-      set(module_file "${module_dir}/${module_name}.swiftmodule")
-      set(module_doc_file "${module_dir}/${module_name}.swiftdoc")
-      list(APPEND swift_flags
-          "-parse-as-library"
-          "-emit-module" "-emit-module-path" "${module_file}")
-    else()
-      list(APPEND swift_flags "-parse-as-library")
+      set(module_file "${module_dir}/${SWIFTFILE_MODULE_NAME}.swiftmodule")
+      set(module_doc_file "${module_dir}/${SWIFTFILE_MODULE_NAME}.swiftdoc")
+      list(APPEND module_command
+          "-emit-module"
+          "-o" "${module_file}")
     endif()
 
     list(APPEND command_create_dirs
@@ -306,7 +309,7 @@ function(_compile_swift_files dependency_target_out_var_name)
     # add the relevant flags to our swift_flags.
     if (SWIFT_EXPERIMENTAL_EXTRA_REGEXP_FLAGS OR SWIFT_EXPERIMENTAL_EXTRA_NEGATIVE_REGEXP_FLAGS)
       set(extra_swift_flags_for_module)
-      _add_extra_swift_flags_for_module("${module_name}" extra_swift_flags_for_module)
+      _add_extra_swift_flags_for_module("${SWIFTFILE_MODULE_NAME}" extra_swift_flags_for_module)
       if (extra_swift_flags_for_module)
         list(APPEND swift_flags ${extra_swift_flags_for_module})
       endif()
@@ -320,7 +323,7 @@ function(_compile_swift_files dependency_target_out_var_name)
   set(line_directive_tool "${SWIFT_SOURCE_DIR}/utils/line-directive")
   set(swift_compiler_tool "${SWIFT_NATIVE_SWIFT_TOOLS_PATH}/swiftc")
   set(swift_compiler_tool_dep)
-  if(SWIFT_BUILD_TOOLS)
+  if(SWIFT_INCLUDE_TOOLS)
     # Depend on the binary itself, in addition to the symlink.
     set(swift_compiler_tool_dep "swift")
   endif()
@@ -369,9 +372,9 @@ function(_compile_swift_files dependency_target_out_var_name)
     set(swift_compiler_tool "${SWIFT_SOURCE_DIR}/utils/check-incremental" "${swift_compiler_tool}")
   endif()
 
-  set(outputs
-    ${SWIFTFILE_OUTPUT} "${module_file}" "${module_doc_file}"
-    ${apinote_files})
+  set(standard_outputs ${SWIFTFILE_OUTPUT})
+  set(apinotes_outputs ${apinote_files})
+  set(module_outputs "${module_file}" "${module_doc_file}")
 
   if(XCODE)
     # HACK: work around an issue with CMake Xcode generator and the Swift
@@ -386,28 +389,75 @@ function(_compile_swift_files dependency_target_out_var_name)
     #
     # To work around this issue we touch the output files so that their mtime
     # always gets updated.
-    set(command_touch_outputs
-      COMMAND "${CMAKE_COMMAND}" -E touch ${outputs})
+    set(command_touch_standard_outputs
+      COMMAND "${CMAKE_COMMAND}" -E touch ${standard_outputs})
+    set(command_touch_apinotes_outputs
+      COMMAND "${CMAKE_COMMAND}" -E touch ${apinotes_outputs})
+    set(command_touch_module_outputs
+      COMMAND "${CMAKE_COMMAND}" -E touch ${module_outputs})
   endif()
 
+  # First generate the obj dirs
+  add_custom_command_target(
+      obj_dirs_dependency_target
+      ${command_create_dirs}
+      COMMAND ""
+      OUTPUT ${obj_dirs}
+      COMMENT "Generating obj dirs for ${first_output}")
+
+  # Generate the api notes if we need them.
+  if (apinotes_outputs)
+    add_custom_command_target(
+        api_notes_dependency_target
+        # Create API notes before compiling, because this will affect the APIs
+        # the overlay sees.
+        ${command_create_apinotes}
+        ${command_touch_apinotes_outputs}
+        COMMAND ""
+        OUTPUT ${apinotes_outputs}
+        DEPENDS
+          ${swift_compiler_tool_dep}
+          ${depends_create_apinotes}
+          ${obj_dirs_dependency_target}
+        COMMENT "Generating API notes ${first_output}")
+  endif()
+
+  # Then we can compile both the object files and the swiftmodule files
+  # in parallel in this target for the object file, and ...
   add_custom_command_target(
       dependency_target
-      ${command_create_dirs}
-      # Create API notes before compiling, because this will affect the APIs
-      # the overlay sees.
-      ${command_create_apinotes}
       COMMAND
         "${line_directive_tool}" "${source_files}" --
         "${swift_compiler_tool}" "${main_command}" ${swift_flags}
         ${output_option} "${source_files}"
-      ${command_touch_outputs}
-      OUTPUT ${outputs}
+      ${command_touch_standard_outputs}
+      OUTPUT ${standard_outputs}
       DEPENDS
         ${swift_compiler_tool_dep}
         ${source_files} ${SWIFTFILE_DEPENDS}
-        ${swift_ide_test_dependency} ${depends_create_apinotes}
+        ${swift_ide_test_dependency} ${api_notes_dependency_target}
+        ${obj_dirs_dependency_target}
       COMMENT "Compiling ${first_output}")
   set("${dependency_target_out_var_name}" "${dependency_target}" PARENT_SCOPE)
+
+  # This is the target to generate the .swiftmodule and .swiftdoc
+  if (module_file)
+    add_custom_command_target(
+        module_dependency_target
+        COMMAND
+          "${line_directive_tool}" "${source_files}" --
+          "${swift_compiler_tool}" "${module_command}" ${swift_flags}
+          "${source_files}"
+        ${command_touch_module_outputs}
+        OUTPUT ${module_outputs}
+        DEPENDS
+          ${swift_compiler_tool_dep}
+          ${source_files} ${SWIFTFILE_DEPENDS}
+          ${swift_ide_test_dependency} ${api_notes_dependency_target}
+          ${obj_dirs_dependency_target}
+        COMMENT "Generating ${module_file}")
+    set("${dependency_module_target_out_var_name}" "${module_dependency_target}" PARENT_SCOPE)
+  endif()
 
   # Make sure the build system knows the file is a generated object file.
   set_source_files_properties(${SWIFTFILE_OUTPUT}

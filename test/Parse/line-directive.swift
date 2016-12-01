@@ -1,4 +1,4 @@
-// RUN: %target-parse-verify-swift
+// RUN: %target-typecheck-verify-swift
 
 let x = 0 // We need this because of the #sourceLocation-ends-with-a-newline requirement.
 
@@ -31,6 +31,3 @@ public struct S { // expected-note{{in declaration of 'S'}}
 
 #sourceLocation()
 
-
-// expected-error@+1{{#line directive was renamed to #sourceLocation}}
-#setline 32000 "troops_on_the_water"

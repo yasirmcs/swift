@@ -1,4 +1,4 @@
-// RUN: %target-parse-verify-swift
+// RUN: %target-typecheck-verify-swift
 
 // expected-error @+1 {{'++' is unavailable: it has been removed in Swift 3}}
 for var a = 0; a < 10; a++ { // expected-error {{C-style for statement has been removed in Swift 3}} {{5-9=}} {{10-13= in }} {{14-20= ..< }} {{22-27=}}
@@ -23,6 +23,12 @@ for var e = 3; e > 4; e++ { // expected-error {{C-style for statement has been r
 
 // expected-error @+1 {{'--' is unavailable: it has been removed in Swift 3}}
 for var f = 3; f < 4; f-- { // expected-error {{C-style for statement has been removed in Swift 3}} {{none}}
+}
+
+for var i = 6; i > 0; i-=1 { // expected-error {{C-style for statement has been removed in Swift 3}} {{5-9=}} {{10-13= in }} {{13-13=((0 + 1)...}} {{14-14=).reversed()}} {{14-27=}}
+}
+
+for var i = 100; i != 0; i-=1 { // expected-error {{C-style for statement has been removed in Swift 3}} {{5-9=}} {{10-13= in }} {{13-13=((0 + 1)...}} {{16-16=).reversed()}} {{16-30=}}
 }
 
 let start = Int8(4)

@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -16,7 +16,8 @@ import TestsUtils
 
 typealias rrggbb_t = UInt32
 
-func output_sorted_sparse_rgb_histogram<S: Sequence where S.Iterator.Element == rrggbb_t>(_ samples: S, _ N: Int) {
+func output_sorted_sparse_rgb_histogram<S: Sequence>(_ samples: S, _ N: Int)
+  where S.Iterator.Element == rrggbb_t {
   var histogram = Dictionary<rrggbb_t, Int>()
   for  _ in 1...50*N {
     for sample in samples {   // This part is really awful, I agree
@@ -110,5 +111,5 @@ let samples: [rrggbb_t] = [
 
 @inline(never)
 public func run_Histogram(_ N: Int) {
-  output_sorted_sparse_rgb_histogram(samples, N);
+  output_sorted_sparse_rgb_histogram(samples, N)
 }

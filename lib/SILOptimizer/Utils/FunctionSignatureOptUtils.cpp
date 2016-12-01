@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -52,6 +52,7 @@ bool swift::hasNonTrivialNonDebugUse(SILArgument *Arg) {
 static bool isSpecializableRepresentation(SILFunctionTypeRepresentation Rep) {
   switch (Rep) {
   case SILFunctionTypeRepresentation::Method:
+  case SILFunctionTypeRepresentation::Closure:
   case SILFunctionTypeRepresentation::Thin:
   case SILFunctionTypeRepresentation::Thick:
   case SILFunctionTypeRepresentation::CFunctionPointer:
@@ -73,13 +74,6 @@ bool swift::canSpecializeFunction(SILFunction *F) {
 
   // For now ignore functions with indirect results.
   if (F->getLoweredFunctionType()->hasIndirectResults())
-    return false;
-
-  // Do not specialize functions that are available externally. If an external
-  // function was able to be specialized, it would have been specialized in its
-  // own module. We will inline the original function as a thunk. The thunk will
-  // call the specialized function.
-  if (F->isAvailableExternally())
     return false;
 
   // Do not specialize the signature of always inline functions. We

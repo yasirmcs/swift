@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -134,7 +134,7 @@ func testObjectiveCBridgeStubURLAppendPathRef() {
   for _ in 0 ..< 10_000 {
     var url = startUrl
     for _ in 0 ..< 10 {
-      url = try! url.appendingPathComponent("foo")
+      url = url.appendingPathComponent("foo")
     }
   }
 }
@@ -153,7 +153,7 @@ func testObjectiveCBridgeStubNSDataAppend() {
   let proto = NSMutableData()
   var value: UInt8 = 1
   for _ in 0 ..< 1_000 {
-    let d = proto.mutableCopy()
+    let d = proto.mutableCopy() as! NSMutableData
     for _ in 0 ..< 100 {
        d.append(&value, length: 1)
     }

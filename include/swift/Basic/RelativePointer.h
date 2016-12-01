@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -276,6 +276,15 @@ private:
   /// RelativePointers should appear in statically-generated metadata. They
   /// shouldn't be constructed or copied.
   RelativeDirectPointerImpl() = delete;
+  /// RelativePointers should appear in statically-generated metadata. They
+  /// shouldn't be constructed or copied.
+  RelativeDirectPointerImpl(RelativeDirectPointerImpl &&) = delete;
+  RelativeDirectPointerImpl(const RelativeDirectPointerImpl &) = delete;
+  RelativeDirectPointerImpl &operator=(RelativeDirectPointerImpl &&)
+    = delete;
+  RelativeDirectPointerImpl &operator=(const RelativeDirectPointerImpl &)
+    = delete;
+
 
 public:
   using ValueTy = T;
@@ -304,12 +313,6 @@ public:
       ? 0
       : detail::measureRelativeOffset<Offset>(absolute, this);
     return *this;
-  }
-  
-  // Can copy-construct by recalculating the relative offset at the new
-  // position.
-  RelativeDirectPointerImpl(const RelativeDirectPointerImpl &p) {
-    *this = p.get();
   }
 
   PointerTy get() const & {

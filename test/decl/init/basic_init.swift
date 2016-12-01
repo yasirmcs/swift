@@ -1,4 +1,4 @@
-// RUN: %target-parse-verify-swift
+// RUN: %target-typecheck-verify-swift
 
 class Foo {
   func bar(_: bar) {} // expected-error{{use of undeclared type 'bar'}}
@@ -10,7 +10,7 @@ class C {
 	init() {}
 }
 
-typealias t = t // expected-error {{circular reference}}
+typealias t = t // expected-error {{redundant type alias declaration}}{{1-17=}}
 
 
 

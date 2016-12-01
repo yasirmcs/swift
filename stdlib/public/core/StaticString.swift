@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -26,12 +26,12 @@
 /// sequence, or as a single Unicode scalar value.
 @_fixed_layout
 public struct StaticString
-  : _BuiltinUnicodeScalarLiteralConvertible,
-    _BuiltinExtendedGraphemeClusterLiteralConvertible,
-    _BuiltinStringLiteralConvertible,
-    UnicodeScalarLiteralConvertible,
-    ExtendedGraphemeClusterLiteralConvertible,
-    StringLiteralConvertible,
+  : _ExpressibleByBuiltinUnicodeScalarLiteral,
+    _ExpressibleByBuiltinExtendedGraphemeClusterLiteral,
+    _ExpressibleByBuiltinStringLiteral,
+    ExpressibleByUnicodeScalarLiteral,
+    ExpressibleByExtendedGraphemeClusterLiteral,
+    ExpressibleByStringLiteral,
     CustomStringConvertible,
     CustomDebugStringConvertible,
     CustomReflectable {
@@ -76,7 +76,7 @@ public struct StaticString
     _precondition(
       !hasPointerRepresentation,
       "StaticString should have Unicode scalar representation")
-    return UnicodeScalar(UInt32(UInt(_startPtrOrData)))
+    return UnicodeScalar(UInt32(UInt(_startPtrOrData)))!
   }
 
   /// The length in bytes of the static string's ASCII or UTF-8 representation.
@@ -118,13 +118,17 @@ public struct StaticString
   /// This method works regardless of whether the static string stores a
   /// pointer or a single Unicode scalar value.
   ///
+  /// The pointer argument to `body` is valid only for the lifetime of the
+  /// closure. Do not escape it from the closure for later use.
+  ///
   /// - Parameter body: A closure that takes a buffer pointer to the static
   ///   string's UTF-8 code unit sequence as its sole argument. If the closure
   ///   has a return value, it is used as the return value of the
-  ///   `withUTF8Buffer(invoke:)` method.
+  ///   `withUTF8Buffer(invoke:)` method. The pointer argument is valid only
+  ///   for the duration of the closure's execution.
   /// - Returns: The return value of the `body` closure, if any.
   public func withUTF8Buffer<R>(
-    invoke body: @noescape (UnsafeBufferPointer<UInt8>) -> R) -> R {
+    _ body: (UnsafeBufferPointer<UInt8>) -> R) -> R {
     if hasPointerRepresentation {
       return body(UnsafeBufferPointer(
         start: utf8Start, count: Int(utf8CodeUnitCount)))
@@ -132,10 +136,14 @@ public struct StaticString
       var buffer: UInt64 = 0
       var i = 0
       let sink: (UInt8) -> Void = {
+#if _endian(little)
         buffer = buffer | (UInt64($0) << (UInt64(i) * 8))
+#else
+        buffer = buffer | (UInt64($0) << (UInt64(7-i) * 8))
+#endif
         i += 1
       }
-      UTF8.encode(unicodeScalar, sendingOutputTo: sink)
+      UTF8.encode(unicodeScalar, into: sink)
       return body(UnsafeBufferPointer(
         start: UnsafePointer(Builtin.addressof(&buffer)),
         count: i))
@@ -251,15 +259,11 @@ public struct StaticString
   public var debugDescription: String {
     return self.description.debugDescription
   }
-
-  public func _getMirror() -> _Mirror {
-    return _reflect(self.description)
-  }
 }
 
 extension StaticString {
   public var customMirror: Mirror {
-    return Mirror(reflecting: String(self))
+    return Mirror(reflecting: description)
   }
 }
 

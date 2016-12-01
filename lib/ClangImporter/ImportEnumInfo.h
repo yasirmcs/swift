@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -19,8 +19,6 @@
 
 #include "swift/AST/ASTContext.h"
 #include "swift/AST/Decl.h"
-#include "clang/AST/Attr.h"
-#include "clang/Basic/SourceLocation.h"
 #include "llvm/ADT/APSInt.h"
 #include "llvm/ADT/DenseMap.h"
 
@@ -54,8 +52,6 @@ enum class EnumKind {
 };
 
 class EnumInfo {
-  using AttributePtrUnion = clang::NSErrorDomainAttr *;
-
   /// The kind
   EnumKind kind = EnumKind::Unknown;
 
@@ -63,18 +59,17 @@ class EnumInfo {
   /// constants
   StringRef constantNamePrefix = StringRef();
 
-  /// The identifying attribute for specially imported enums
-  ///
-  /// Currently, only NS_ERROR_ENUM creates one for its error domain, but others
-  /// should in the future.
-  AttributePtrUnion attribute = nullptr;
+  /// The name of the NS error domain for Cocoa error enums.
+  StringRef nsErrorDomain = StringRef();
 
 public:
   EnumInfo() = default;
 
+  // TODO: wean ourselves off of the ASTContext, we just want a slab that will
+  // outlive us to store our strings on.
   EnumInfo(ASTContext &ctx, const clang::EnumDecl *decl,
            clang::Preprocessor &pp) {
-    classifyEnum(decl, pp);
+    classifyEnum(ctx, decl, pp);
     determineConstantNamePrefix(ctx, decl);
   }
 
@@ -84,18 +79,48 @@ public:
 
   /// Whether this maps to an enum who also provides an error domain
   bool isErrorEnum() const {
-    return getKind() == EnumKind::Enum && attribute;
+    return getKind() == EnumKind::Enum && !nsErrorDomain.empty();
   }
 
   /// For this error enum, extract the name of the error domain constant
-  clang::IdentifierInfo *getErrorDomain() const {
+  StringRef getErrorDomain() const {
     assert(isErrorEnum() && "not error enum");
-    return attribute->getErrorDomain();
+    return nsErrorDomain;
   }
 
 private:
   void determineConstantNamePrefix(ASTContext &ctx, const clang::EnumDecl *);
-  void classifyEnum(const clang::EnumDecl *, clang::Preprocessor &);
+  void classifyEnum(ASTContext &ctx, const clang::EnumDecl *,
+                    clang::Preprocessor &);
+};
+
+/// Provide a cache of enum infos, so that we don't have to re-calculate their
+/// information.
+class EnumInfoCache {
+  ASTContext &swiftCtx;
+  clang::Preprocessor &clangPP;
+
+  llvm::DenseMap<const clang::EnumDecl *, EnumInfo> enumInfos;
+
+  // Never copy
+  EnumInfoCache(const EnumInfoCache &) = delete;
+  EnumInfoCache &operator = (const EnumInfoCache &) = delete;
+
+public:
+  EnumInfoCache(ASTContext &swiftContext, clang::Preprocessor &cpp)
+      : swiftCtx(swiftContext), clangPP(cpp) {}
+
+  EnumInfo getEnumInfo(const clang::EnumDecl *decl);
+
+  EnumKind getEnumKind(const clang::EnumDecl *decl) {
+    return getEnumInfo(decl).getKind();
+  }
+
+  /// The prefix to be stripped from the names of the enum constants within the
+  /// given enum.
+  StringRef getEnumConstantNamePrefix(const clang::EnumDecl *decl) {
+    return getEnumInfo(decl).getConstantNamePrefix();
+  }
 };
 
 // Utility functions of primary interest to enum constant naming

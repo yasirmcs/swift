@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -50,6 +50,7 @@ STATISTIC(NumTargetsPredicted, "Number of monomorphic functions predicted");
 static FullApplySite CloneApply(FullApplySite AI, SILBuilder &Builder) {
   // Clone the Apply.
   Builder.setCurrentDebugScope(AI.getDebugScope());
+  Builder.addOpenedArchetypeOperands(AI.getInstruction());
   auto Args = AI.getArguments();
   SmallVector<SILValue, 8> Ret(Args.size());
   for (unsigned i = 0, e = Args.size(); i != e; ++i)
@@ -106,9 +107,9 @@ static FullApplySite speculateMonomorphicTarget(FullApplySite AI,
   SILBasicBlock *Iden = F->createBasicBlock();
   // Virt is the block containing the slow virtual call.
   SILBasicBlock *Virt = F->createBasicBlock();
-  Iden->createBBArg(SubType);
+  Iden->createArgument(SubType);
 
-  SILBasicBlock *Continue = Entry->splitBasicBlock(It);
+  SILBasicBlock *Continue = Entry->split(It);
 
   SILBuilderWithScope Builder(Entry, AI.getInstruction());
   // Create the checked_cast_branch instruction that checks at runtime if the
@@ -124,7 +125,7 @@ static FullApplySite speculateMonomorphicTarget(FullApplySite AI,
   SILBuilderWithScope VirtBuilder(Virt, AI.getInstruction());
   SILBuilderWithScope IdenBuilder(Iden, AI.getInstruction());
   // This is the class reference downcasted into subclass SubType.
-  SILValue DownCastedClassInstance = Iden->getBBArg(0);
+  SILValue DownCastedClassInstance = Iden->getArgument(0);
 
   // Copy the two apply instructions into the two blocks.
   FullApplySite IdenAI = CloneApply(AI, IdenBuilder);
@@ -132,20 +133,21 @@ static FullApplySite speculateMonomorphicTarget(FullApplySite AI,
 
   // See if Continue has a release on self as the instruction right after the
   // apply. If it exists, move it into position in the diamond.
-  if (auto *Release =
-          dyn_cast<StrongReleaseInst>(std::next(Continue->begin()))) {
-    if (Release->getOperand() == CMI->getOperand()) {
-      VirtBuilder.createStrongRelease(Release->getLoc(), CMI->getOperand(),
-                                      Atomicity::Atomic);
-      IdenBuilder.createStrongRelease(
-          Release->getLoc(), DownCastedClassInstance, Atomicity::Atomic);
-      Release->eraseFromParent();
-    }
+  SILBasicBlock::iterator next =
+      next_or_end(Continue->begin(), Continue->end());
+  auto *Release =
+      (next == Continue->end()) ? nullptr : dyn_cast<StrongReleaseInst>(next);
+  if (Release && Release->getOperand() == CMI->getOperand()) {
+    VirtBuilder.createStrongRelease(Release->getLoc(), CMI->getOperand(),
+                                    Atomicity::Atomic);
+    IdenBuilder.createStrongRelease(Release->getLoc(), DownCastedClassInstance,
+                                    Atomicity::Atomic);
+    Release->eraseFromParent();
   }
 
   // Create a PHInode for returning the return value from both apply
   // instructions.
-  SILArgument *Arg = Continue->createBBArg(AI.getType());
+  SILArgument *Arg = Continue->createArgument(AI.getType());
   if (!isa<TryApplyInst>(AI)) {
     IdenBuilder.createBranch(AI.getLoc(), Continue,
                              ArrayRef<SILValue>(IdenAI.getInstruction()));
@@ -179,16 +181,16 @@ static FullApplySite speculateMonomorphicTarget(FullApplySite AI,
   // Split critical edges resulting from VirtAI.
   if (auto *TAI = dyn_cast<TryApplyInst>(VirtAI)) {
     auto *ErrorBB = TAI->getFunction()->createBasicBlock();
-    ErrorBB->createBBArg(TAI->getErrorBB()->getBBArg(0)->getType());
+    ErrorBB->createArgument(TAI->getErrorBB()->getArgument(0)->getType());
     Builder.setInsertionPoint(ErrorBB);
     Builder.createBranch(TAI->getLoc(), TAI->getErrorBB(),
-                         {ErrorBB->getBBArg(0)});
+                         {ErrorBB->getArgument(0)});
 
     auto *NormalBB = TAI->getFunction()->createBasicBlock();
-    NormalBB->createBBArg(TAI->getNormalBB()->getBBArg(0)->getType());
+    NormalBB->createArgument(TAI->getNormalBB()->getArgument(0)->getType());
     Builder.setInsertionPoint(NormalBB);
     Builder.createBranch(TAI->getLoc(), TAI->getNormalBB(),
-                        {NormalBB->getBBArg(0) });
+                         {NormalBB->getArgument(0)});
 
     Builder.setInsertionPoint(VirtAI.getInstruction());
     SmallVector<SILValue, 4> Args;
@@ -245,12 +247,14 @@ static bool isDefaultCaseKnown(ClassHierarchyAnalysis *CHA,
 
   // Only consider 'private' members, unless we are in whole-module compilation.
   switch (CD->getEffectiveAccess()) {
-  case Accessibility::Public:
+  case Accessibility::Open:
     return false;
+  case Accessibility::Public:
   case Accessibility::Internal:
     if (!AI.getModule().isWholeModule())
       return false;
     break;
+  case Accessibility::FilePrivate:
   case Accessibility::Private:
     break;
   }
@@ -327,7 +331,7 @@ static bool tryToSpeculateTarget(FullApplySite AI,
   // Bail if any generic types parameters of the class instance type are
   // unbound.
   // We cannot devirtualize unbound generic calls yet.
-  if (isNominalTypeWithUnboundGenericParameters(SubType, AI.getModule()))
+  if (SubType.getSwiftRValueType()->hasArchetype())
     return false;
 
   auto &M = CMI->getModule();

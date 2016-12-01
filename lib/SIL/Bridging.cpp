@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -110,6 +110,7 @@ Type TypeConverter::getLoweredBridgedType(AbstractionPattern pattern,
   case SILFunctionTypeRepresentation::Thin:
   case SILFunctionTypeRepresentation::Method:
   case SILFunctionTypeRepresentation::WitnessMethod:
+  case SILFunctionTypeRepresentation::Closure:
     // No bridging needed for native CCs.
     return t;
   case SILFunctionTypeRepresentation::CFunctionPointer:
@@ -170,6 +171,11 @@ Type TypeConverter::getLoweredCBridgedType(AbstractionPattern pattern,
     }
   }
   
+  // `Any` can bridge to `AnyObject` (`id` in ObjC).
+  if (t->isAny()) {
+    return Context.getProtocol(KnownProtocolKind::AnyObject)->getDeclaredType();
+  }
+  
   if (auto funTy = t->getAs<FunctionType>()) {
     switch (funTy->getExtInfo().getSILRepresentation()) {
     // Functions that are already represented as blocks or C function pointers
@@ -180,6 +186,7 @@ Type TypeConverter::getLoweredCBridgedType(AbstractionPattern pattern,
     case SILFunctionType::Representation::Method:
     case SILFunctionType::Representation::ObjCMethod:
     case SILFunctionType::Representation::WitnessMethod:
+    case SILFunctionType::Representation::Closure:
       return t;
     case SILFunctionType::Representation::Thick: {
       // Thick functions (TODO: conditionally) get bridged to blocks.
@@ -216,12 +223,19 @@ Type TypeConverter::getLoweredCBridgedType(AbstractionPattern pattern,
     assert(conformance && "Missing conformance?");
     Type bridgedTy =
       ProtocolConformance::getTypeWitnessByName(
-        t, conformance, M.getASTContext().Id_ObjectiveCType,
+        t, ProtocolConformanceRef(conformance),
+        M.getASTContext().Id_ObjectiveCType,
         nullptr);
     assert(bridgedTy && "Missing _ObjectiveCType witness?");
     if (bridgedCollectionsAreOptional && clangTy)
       bridgedTy = OptionalType::get(bridgedTy);
     return bridgedTy;
+  }
+
+  case ForeignRepresentableKind::BridgedError: {
+    auto nsErrorDecl = M.getASTContext().getNSErrorDecl();
+    assert(nsErrorDecl && "Cannot bridge when NSError isn't available");
+    return nsErrorDecl->getDeclaredInterfaceType();
   }
   }
 

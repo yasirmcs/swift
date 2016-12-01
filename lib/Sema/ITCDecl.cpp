@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -103,7 +103,7 @@ void IterativeTypeChecker::processResolveInheritedClauseEntry(
 
   // Validate the type of this inherited clause entry.
   // FIXME: Recursion into existing type checker.
-  PartialGenericTypeToArchetypeResolver resolver(TC);
+  PartialGenericTypeToArchetypeResolver resolver;
   if (TC.validateType(*inherited, dc, options, &resolver)) {
     inherited->setInvalidType(getASTContext());
   }
@@ -153,6 +153,8 @@ void IterativeTypeChecker::processTypeCheckSuperclass(
   }
 
   // Set the superclass type.
+  if (classDecl->isInvalid())
+    superclassType = ErrorType::get(getASTContext());
   classDecl->setSuperclass(superclassType);
 }
 
@@ -220,6 +222,7 @@ void IterativeTypeChecker::processInheritedProtocols(
   // FIXME: Technically, we only need very basic name binding.
   auto inheritedClause = protocol->getInherited();
   bool anyDependencies = false;
+  bool diagnosedCircularity = false;
   llvm::SmallSetVector<ProtocolDecl *, 4> allProtocols;
   for (unsigned i = 0, n = inheritedClause.size(); i != n; ++i) {
     TypeLoc &inherited = inheritedClause[i];
@@ -235,8 +238,20 @@ void IterativeTypeChecker::processInheritedProtocols(
     // FIXME: We'd prefer to keep what the user wrote here.
     SmallVector<ProtocolDecl *, 4> protocols;
     if (inherited.getType()->isExistentialType(protocols)) {
-      allProtocols.insert(protocols.begin(), protocols.end());
-      continue;
+      for (auto inheritedProtocol: protocols) {
+        if (inheritedProtocol == protocol ||
+            inheritedProtocol->inheritsFrom(protocol)) {
+          if (!diagnosedCircularity &&
+              !protocol->isInheritedProtocolsValid()) {
+            diagnose(protocol,
+                     diag::circular_protocol_def, protocol->getName().str())
+                    .fixItRemove(inherited.getSourceRange());
+            diagnosedCircularity = true;
+          }
+          continue;
+        }
+        allProtocols.insert(inheritedProtocol);
+      }
     }
   }
 
@@ -245,30 +260,10 @@ void IterativeTypeChecker::processInheritedProtocols(
     return;
 
   // FIXME: Hack to deal with recursion elsewhere.
+  // We recurse through DeclContext::getLocalProtocols() -- this should be
+  // redone to use the IterativeDeclChecker also.
   if (protocol->isInheritedProtocolsValid())
     return;
-
-  // Check for circular inheritance.
-  // FIXME: The diagnostics here should be improved... and this should probably
-  // be handled by the normal cycle detection.
-  bool diagnosedCircularity = false;
-  for (unsigned i = 0, n = allProtocols.size(); i != n; /*in loop*/) {
-    if (allProtocols[i] == protocol ||
-        allProtocols[i]->inheritsFrom(protocol)) {
-      if (!diagnosedCircularity) {
-        diagnose(protocol,
-                 diag::circular_protocol_def, protocol->getName().str());
-        diagnosedCircularity = true;
-      }
-
-      allProtocols.remove(allProtocols[i]);
-      --n;
-      continue;
-    }
-
-    ++i;
-  }
-
   protocol->setInheritedProtocols(getASTContext().AllocateCopy(allProtocols));
 }
 
@@ -291,7 +286,7 @@ bool IterativeTypeChecker::isResolveTypeDeclSatisfied(TypeDecl *typeDecl) {
 
   if (auto typeParam = dyn_cast<AbstractTypeParamDecl>(typeDecl)) {
     // FIXME: Deal with these.
-    return typeParam->getArchetype();
+    return typeParam->getDeclContext()->isValidGenericContext();
   }
 
   // Module types are always fully resolved.
@@ -300,7 +295,7 @@ bool IterativeTypeChecker::isResolveTypeDeclSatisfied(TypeDecl *typeDecl) {
 
   // Nominal types.
   auto nominal = cast<NominalTypeDecl>(typeDecl);
-  return !nominal->getDeclaredType().isNull();
+  return nominal->hasType();
 }
 
 void IterativeTypeChecker::processResolveTypeDecl(
@@ -314,7 +309,7 @@ void IterativeTypeChecker::processResolveTypeDecl(
       
       TypeResolutionOptions options;
       options |= TR_GlobalTypeAlias;
-      if (typeAliasDecl->getFormalAccess() == Accessibility::Private)
+      if (typeAliasDecl->getFormalAccess() <= Accessibility::FilePrivate)
         options |= TR_KnownNonCascadingDependency;
 
       // Note: recursion into old type checker is okay when passing in an

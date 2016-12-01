@@ -1,4 +1,4 @@
-// RUN: %target-swift-frontend -enable-experimental-patterns -emit-silgen %s | FileCheck %s
+// RUN: %target-swift-frontend -emit-silgen %s | %FileCheck %s
 
 func markUsed<T>(_ t: T) {}
 
@@ -314,7 +314,7 @@ struct Y : P { func p() {} }
 struct Z : P { func p() {} }
 
 // CHECK-LABEL: sil hidden  @_TF6switch10test_isa_1FT1pPS_1P__T_
-func test_isa_1(p p: P) {
+func test_isa_1(p: P) {
   // CHECK: [[PTMPBUF:%[0-9]+]] = alloc_stack $P
   // CHECK-NEXT: copy_addr %0 to [initialization] [[PTMPBUF]] : $*P
   switch p {
@@ -323,7 +323,7 @@ func test_isa_1(p p: P) {
 
   case is X:
   // CHECK: [[IS_X]]:
-  // CHECK-NEXT: load [[TMPBUF]]
+  // CHECK-NEXT: load [trivial] [[TMPBUF]]
   // CHECK-NEXT: dealloc_stack [[TMPBUF]]
   // CHECK-NEXT: destroy_addr [[PTMPBUF]]
   // CHECK-NEXT: dealloc_stack [[PTMPBUF]]
@@ -361,7 +361,7 @@ func test_isa_1(p p: P) {
 }
 
 // CHECK-LABEL: sil hidden  @_TF6switch10test_isa_2FT1pPS_1P__T_
-func test_isa_2(p p: P) {
+func test_isa_2(p: P) {
   switch (p, foo()) {
   // CHECK:   checked_cast_addr_br copy_on_success P in [[P:%.*]] : $*P to X in {{%.*}} : $*X, [[IS_X:bb[0-9]+]], [[IS_NOT_X:bb[0-9]+]]
 
@@ -430,144 +430,204 @@ class D1 : C {}
 class D2 : D1 {}
 class E : C {}
 
-// CHECK-LABEL: sil hidden @_TF6switch16test_isa_class_1FT1xCS_1B_T_
-func test_isa_class_1(x x: B) {
-  // CHECK: strong_retain %0
+// CHECK-LABEL: sil hidden @_TF6switch16test_isa_class_1FT1xCS_1B_T_ : $@convention(thin) (@owned B) -> () {
+func test_isa_class_1(x: B) {
+  // CHECK: bb0([[X:%.*]] : $B):
+  // CHECK:   [[X_COPY:%.*]] = copy_value [[X]]
+  // CHECK:   checked_cast_br [[X_COPY]] : $B to $D1, [[IS_D1:bb[0-9]+]], [[IS_NOT_D1:bb[0-9]+]]
   switch x {
-  // CHECK:   checked_cast_br [[X:%.*]] : $B to $D1, [[IS_D1:bb[0-9]+]], [[IS_NOT_D1:bb[0-9]+]]
 
   // CHECK: [[IS_D1]]([[CAST_D1:%.*]]):
-  // CHECK:   function_ref @_TF6switch6runcedFT_Sb
+  // CHECK:   [[CAST_D1_COPY:%.*]] = copy_value [[CAST_D1]]
+  // CHECK:   function_ref @_TF6switch6runcedFT_Sb : $@convention(thin) () -> Bool
   // CHECK:   cond_br {{%.*}}, [[YES_CASE1:bb[0-9]+]], [[NO_CASE1:bb[0-9]+]]
 
   // CHECK: [[YES_CASE1]]:
   case is D1 where runced():
-  // CHECK:   strong_release [[CAST_D1]]
+  // CHECK:   destroy_value [[CAST_D1_COPY]]
+  // CHECK:   destroy_value [[X_COPY]]
   // CHECK:   function_ref @_TF6switch1aFT_T_
   // CHECK:   br [[CONT:bb[0-9]+]]
     a()
 
   // CHECK: [[NO_CASE1]]:
-  // CHECK: [[IS_NOT_D1]]:
-  // CHECK:   checked_cast_br [[X]] : $B to $D2, [[IS_D2:bb[0-9]+]], [[IS_NOT_D2:bb[0-9]+]]
+  // CHECK:   destroy_value [[CAST_D1_COPY]]
+  // CHECK:   br [[NEXT_CASE:bb5]]
 
-  // CHECK: [[IS_D2]]([[CAST_D2:%.*]]):
+  // CHECK: [[IS_NOT_D1]]:
+  // CHECK:   br [[NEXT_CASE]]
+
+  // CHECK: [[NEXT_CASE]]
+  // CHECK:   checked_cast_br [[X_COPY]] : $B to $D2, [[IS_D2:bb[0-9]+]], [[IS_NOT_D2:bb[0-9]+]]
   case is D2:
-  // CHECK:   strong_release %0
+  // CHECK: [[IS_D2]]([[CAST_D2:%.*]]):
+  // CHECK:   [[CAST_D2_COPY:%.*]] = copy_value [[CAST_D2]]
+  // CHECK:   destroy_value [[CAST_D2_COPY]]
+  // CHECK:   destroy_value [[X_COPY]]
   // CHECK:   function_ref @_TF6switch1bFT_T_
   // CHECK:   br [[CONT]]
     b()
 
   // CHECK: [[IS_NOT_D2]]:
-  // CHECK:   checked_cast_br [[X]] : $B to $E, [[IS_E:bb[0-9]+]], [[IS_NOT_E:bb[0-9]+]]
+  // CHECK:   br [[NEXT_CASE:bb8]]
 
+  // CHECK: [[NEXT_CASE]]:
+  // CHECK:   checked_cast_br [[X_COPY]] : $B to $E, [[IS_E:bb[0-9]+]], [[IS_NOT_E:bb[0-9]+]]
+  case is E where funged():
   // CHECK: [[IS_E]]([[CAST_E:%.*]]):
+  // CHECK:   [[CAST_E_COPY:%.*]] = copy_value [[CAST_E]]
   // CHECK:   function_ref @_TF6switch6fungedFT_Sb
   // CHECK:   cond_br {{%.*}}, [[CASE3:bb[0-9]+]], [[NO_CASE3:bb[0-9]+]]
 
-  case is E where funged():
   // CHECK: [[CASE3]]:
+  // CHECK:   destroy_value [[CAST_E_COPY]]
+  // CHECK:   destroy_value [[X_COPY]]
   // CHECK:   function_ref @_TF6switch1cFT_T_
   // CHECK:   br [[CONT]]
     c()
 
   // CHECK: [[NO_CASE3]]:
-  // CHECK: [[IS_NOT_E]]:
-  // CHECK:   checked_cast_br [[X]] : $B to $C, [[IS_C:bb[0-9]+]], [[IS_NOT_C:bb[0-9]+]]
+  // CHECK:   destroy_value [[CAST_E_COPY]]
+  // CHECK:   br [[NEXT_CASE:bb13]]
 
-  // CHECK: [[IS_C]]([[CAST_C:%.*]]):
+  // CHECK: [[IS_NOT_E]]:
+  // CHECK:   br [[NEXT_CASE]]
+
+  // CHECK: [[NEXT_CASE]]
+  // CHECK:   checked_cast_br [[X_COPY]] : $B to $C, [[IS_C:bb[0-9]+]], [[IS_NOT_C:bb[0-9]+]]
+
   case is C:
+  // CHECK: [[IS_C]]([[CAST_C:%.*]]):
+  // CHECK:   [[CAST_C_COPY:%.*]] = copy_value [[CAST_C]]
+  // CHECK:   destroy_value [[CAST_C_COPY]]
+  // CHECK:   destroy_value [[X_COPY]]
   // CHECK:   function_ref @_TF6switch1dFT_T_
   // CHECK:   br [[CONT]]
     d()
 
   // CHECK: [[IS_NOT_C]]:
+  // CHECK:   br [[NEXT_CASE:bb16]]
+
+  // CHECK: [[NEXT_CASE]]:
   default:
-  // CHECK:   strong_release [[X]]
-  // CHECK:  function_ref @_TF6switch1eFT_T_
-  // CHECK:  br [[CONT]]
+  // CHECK:    destroy_value [[X_COPY]]
+  // CHECK:    function_ref @_TF6switch1eFT_T_
+  // CHECK:    br [[CONT]]
     e()
   }
   // CHECK: [[CONT]]:
-  // CHECK: strong_release %0
+  // CHECK:   [[F_FUNC:%.*]] = function_ref @_TF6switch1fFT_T_ : $@convention(thin) () -> ()
+  // CHECK:   apply [[F_FUNC]]()
+  // CHECK:   destroy_value [[X]]
   f()
 }
+// CHECK: } // end sil function '_TF6switch16test_isa_class_1FT1xCS_1B_T_'
 
-// CHECK-LABEL: sil hidden @_TF6switch16test_isa_class_2FT1xCS_1B_Ps9AnyObject_
-func test_isa_class_2(x x: B) -> AnyObject {
-  // CHECK:   strong_retain [[X:%0]]
+// CHECK-LABEL: sil hidden @_TF6switch16test_isa_class_2FT1xCS_1B_Ps9AnyObject_ : $@convention(thin)
+func test_isa_class_2(x: B) -> AnyObject {
+  // CHECK: bb0([[X:%.*]] : $B):
+  // CHECK:   [[X_COPY:%.*]] = copy_value [[X]]
   switch x {
-  // CHECK:   checked_cast_br [[X]] : $B to $D1, [[IS_D1:bb[0-9]+]], [[IS_NOT_D1:bb[0-9]+]]
 
-  // CHECK: [[IS_D1]]([[CAST_D1:%.*]]):
-  // CHECK:   strong_retain [[CAST_D1]]
+  // CHECK:   checked_cast_br [[X_COPY]] : $B to $D1, [[IS_D1:bb[0-9]+]], [[IS_NOT_D1:bb[0-9]+]]
+  case let y as D1 where runced():
+  // CHECK: [[IS_D1]]([[CAST_D1:%.*]] : $D1):
+  // CHECK:   [[CAST_D1_COPY:%.*]] = copy_value [[CAST_D1]]
   // CHECK:   function_ref @_TF6switch6runcedFT_Sb
   // CHECK:   cond_br {{%.*}}, [[CASE1:bb[0-9]+]], [[NO_CASE1:bb[0-9]+]]
 
-  case let y as D1 where runced():
   // CHECK: [[CASE1]]:
   // CHECK:   function_ref @_TF6switch1aFT_T_
-  // CHECK:   [[RET:%.*]] = init_existential_ref [[CAST_D1]]
-  // CHECK:   strong_release [[X]] : $B
+  // CHECK:   [[CAST_D1_COPY_COPY:%.*]] = copy_value [[CAST_D1_COPY]]
+  // CHECK:   [[RET:%.*]] = init_existential_ref [[CAST_D1_COPY_COPY]]
+  // CHECK:   destroy_value [[CAST_D1_COPY]]
+  // CHECK:   destroy_value [[X_COPY]] : $B
   // CHECK:   br [[CONT:bb[0-9]+]]([[RET]] : $AnyObject)
     a()
     return y
 
   // CHECK: [[NO_CASE1]]:
-  // CHECK:   strong_release [[CAST_D1]]
+  // CHECK:   destroy_value [[CAST_D1_COPY]]
+  // CHECK:   br [[NEXT_CASE:bb5]]
+  
   // CHECK: [[IS_NOT_D1]]:
-  // CHECK:   checked_cast_br [[X]] : $B to $D2, [[CASE2:bb[0-9]+]], [[IS_NOT_D2:bb[0-9]+]]
+  // CHECK:   br [[NEXT_CASE]]
 
+  // CHECK: [[NEXT_CASE]]:
+  // CHECK:   checked_cast_br [[X_COPY]] : $B to $D2, [[CASE2:bb[0-9]+]], [[IS_NOT_D2:bb[0-9]+]]
   case let y as D2:
   // CHECK: [[CASE2]]([[CAST_D2:%.*]]):
+  // CHECK:   [[CAST_D2_COPY:%.*]] = copy_value [[CAST_D2]]
   // CHECK:   function_ref @_TF6switch1bFT_T_
-  // CHECK:   [[RET:%.*]] = init_existential_ref [[CAST_D2]]
+  // CHECK:   [[CAST_D2_COPY_COPY:%.*]] = copy_value [[CAST_D2_COPY]]
+  // CHECK:   [[RET:%.*]] = init_existential_ref [[CAST_D2_COPY_COPY]]
+  // CHECK:   destroy_value [[CAST_D2_COPY]]
+  // CHECK:   destroy_value [[X_COPY]]
   // CHECK:   br [[CONT]]([[RET]] : $AnyObject)
     b()
     return y
 
   // CHECK: [[IS_NOT_D2]]:
-  // CHECK:   checked_cast_br [[X]] : $B to $E, [[IS_E:bb[0-9]+]], [[IS_NOT_E:bb[0-9]+]]
+  // CHECK:   br [[NEXT_CASE:bb8]]
 
+  // CHECK: [[NEXT_CASE]]:
+  // CHECK:   checked_cast_br [[X_COPY]] : $B to $E, [[IS_E:bb[0-9]+]], [[IS_NOT_E:bb[0-9]+]]
+  case let y as E where funged():
   // CHECK: [[IS_E]]([[CAST_E:%.*]]):
-  // CHECK:   strong_retain [[CAST_E]]
+  // CHECK:   [[CAST_E_COPY:%.*]] = copy_value [[CAST_E]]
   // CHECK:   function_ref @_TF6switch6fungedFT_Sb
   // CHECK:   cond_br {{%.*}}, [[CASE3:bb[0-9]+]], [[NO_CASE3:bb[0-9]+]]
 
-  case let y as E where funged():
   // CHECK: [[CASE3]]:
   // CHECK:   function_ref @_TF6switch1cFT_T_
-  // CHECK:   [[RET:%.*]] = init_existential_ref [[CAST_E]]
-  // CHECK:   strong_release [[X]] : $B
+  // CHECK:   [[CAST_E_COPY_COPY:%.*]] = copy_value [[CAST_E_COPY]]
+  // CHECK:   [[RET:%.*]] = init_existential_ref [[CAST_E_COPY_COPY]]
+  // CHECK:   destroy_value [[CAST_E_COPY]]
+  // CHECK:   destroy_value [[X_COPY]] : $B
   // CHECK:   br [[CONT]]([[RET]] : $AnyObject)
     c()
     return y
 
   // CHECK: [[NO_CASE3]]:
-  // CHECK    strong_release [[CAST_E]]
+  // CHECK    destroy_value [[CAST_E_COPY]]
+  // CHECK:   br [[NEXT_CASE:bb13]]
+
   // CHECK: [[IS_NOT_E]]:
-  // CHECK:   checked_cast_br [[X]] : $B to $C, [[CASE4:bb[0-9]+]], [[IS_NOT_C:bb[0-9]+]]
+  // CHECK:   br [[NEXT_CASE]]
+
+  // CHECK: [[NEXT_CASE]]
+  // CHECK:   checked_cast_br [[X_COPY]] : $B to $C, [[CASE4:bb[0-9]+]], [[IS_NOT_C:bb[0-9]+]]
   case let y as C:
   // CHECK: [[CASE4]]([[CAST_C:%.*]]):
+  // CHECK:   [[CAST_C_COPY:%.*]] = copy_value [[CAST_C]]
   // CHECK:   function_ref @_TF6switch1dFT_T_
-  // CHECK:   [[RET:%.*]] = init_existential_ref [[CAST_C]]
+  // CHECK:   [[CAST_C_COPY_COPY:%.*]] = copy_value [[CAST_C_COPY]]
+  // CHECK:   [[RET:%.*]] = init_existential_ref [[CAST_C_COPY_COPY]]
+  // CHECK:   destroy_value [[CAST_C_COPY]]
+  // CHECK:   destroy_value [[X_COPY]]
   // CHECK:   br [[CONT]]([[RET]] : $AnyObject)
     d()
     return y
 
   // CHECK: [[IS_NOT_C]]:
+  // CHECK:   br [[NEXT_CASE:bb16]]
+
+  // CHECK: [[NEXT_CASE]]:
   default:
+  // CHECK:   destroy_value [[X_COPY]]
   // CHECK:   function_ref @_TF6switch1eFT_T_
-  // CHECK:   [[RET:%.*]] = init_existential_ref [[X]]
+  // CHECK:   [[X_COPY_2:%.*]] = copy_value [[X]]
+  // CHECK:   [[RET:%.*]] = init_existential_ref [[X_COPY_2]]
   // CHECK:   br [[CONT]]([[RET]] : $AnyObject)
     e()
     return x
   }
 
   // CHECK: [[CONT]]([[T0:%.*]] : $AnyObject):
-  // CHECK:   strong_release [[X]]
+  // CHECK:   destroy_value [[X]]
   // CHECK:   return [[T0]]
 }
+// CHECK: } // end sil function '_TF6switch16test_isa_class_2FT1xCS_1B_Ps9AnyObject_'
 
 enum MaybePair {
   case Neither
@@ -577,7 +637,7 @@ enum MaybePair {
 }
 
 // CHECK-LABEL: sil hidden  @_TF6switch12test_union_1FT1uOS_9MaybePair_T_
-func test_union_1(u u: MaybePair) {
+func test_union_1(u: MaybePair) {
   switch u {
   // CHECK: switch_enum [[SUBJECT:%.*]] : $MaybePair,
   // CHECK:   case #MaybePair.Neither!enumelt: [[IS_NEITHER:bb[0-9]+]],
@@ -586,14 +646,14 @@ func test_union_1(u u: MaybePair) {
   // CHECK:   case #MaybePair.Both!enumelt.1: [[IS_BOTH:bb[0-9]+]]
 
   // CHECK: [[IS_NEITHER]]:
-  // CHECK-NOT: release
+  // CHECK-NOT: destroy_value
   case .Neither:
   // CHECK:   function_ref @_TF6switch1aFT_T_
   // CHECK:   br [[CONT:bb[0-9]+]]
     a()
 
   // CHECK: [[IS_LEFT]]({{%.*}}):
-  // CHECK-NOT: release
+  // CHECK-NOT: destroy_value
   case (.Left):
   // CHECK:   function_ref @_TF6switch1bFT_T_
   // CHECK:   br [[CONT]]
@@ -601,14 +661,14 @@ func test_union_1(u u: MaybePair) {
 
   // CHECK: [[IS_RIGHT]]([[STR:%.*]] : $String):
   case var .Right:
-  // CHECK:   release_value [[STR]] : $String
+  // CHECK:   destroy_value [[STR]] : $String
   // CHECK:   function_ref @_TF6switch1cFT_T_
   // CHECK:   br [[CONT]]
     c()
 
   // CHECK: [[IS_BOTH]]([[TUP:%.*]] : $(Int, String)):
   case .Both:
-  // CHECK:   release_value [[TUP]] : $(Int, String)
+  // CHECK:   destroy_value [[TUP]] : $(Int, String)
   // CHECK:   function_ref @_TF6switch1dFT_T_
   // CHECK:   br [[CONT]]
     d()
@@ -621,7 +681,7 @@ func test_union_1(u u: MaybePair) {
 }
 
 // CHECK-LABEL: sil hidden  @_TF6switch12test_union_2FT1uOS_9MaybePair_T_
-func test_union_2(u u: MaybePair) {
+func test_union_2(u: MaybePair) {
   switch u {
   // CHECK: switch_enum {{%.*}} : $MaybePair,
   // CHECK:   case #MaybePair.Neither!enumelt: [[IS_NEITHER:bb[0-9]+]],
@@ -657,16 +717,16 @@ func test_union_2(u u: MaybePair) {
   d()
 }
 
-// CHECK-LABEL: sil hidden  @_TF6switch12test_union_3FT1uOS_9MaybePair_T_
-func test_union_3(u u: MaybePair) {
-  // CHECK:   retain_value [[SUBJECT:%0]]
+// CHECK-LABEL: sil hidden  @_TF6switch12test_union_3FT1uOS_9MaybePair_T_ : $@convention(thin) (@owned MaybePair) -> () {
+func test_union_3(u: MaybePair) {
+  // CHECK: bb0([[ARG:%.*]] : $MaybePair):
+  // CHECK:   [[ARG_COPY:%.*]] = copy_value [[ARG]]
+  // CHECK:   switch_enum [[SUBJECT]] : $MaybePair,
+  // CHECK:     case #MaybePair.Neither!enumelt: [[IS_NEITHER:bb[0-9]+]],
+  // CHECK:     case #MaybePair.Left!enumelt.1: [[IS_LEFT:bb[0-9]+]],
+  // CHECK:     case #MaybePair.Right!enumelt.1: [[IS_RIGHT:bb[0-9]+]],
+  // CHECK:     default [[DEFAULT:bb[0-9]+]]
   switch u {
-  // CHECK: switch_enum [[SUBJECT]] : $MaybePair,
-  // CHECK:   case #MaybePair.Neither!enumelt: [[IS_NEITHER:bb[0-9]+]],
-  // CHECK:   case #MaybePair.Left!enumelt.1: [[IS_LEFT:bb[0-9]+]],
-  // CHECK:   case #MaybePair.Right!enumelt.1: [[IS_RIGHT:bb[0-9]+]],
-  // CHECK:   default [[DEFAULT:bb[0-9]+]]
-
   // CHECK: [[IS_NEITHER]]:
   case .Neither:
   // CHECK:   function_ref @_TF6switch1aFT_T_
@@ -681,14 +741,14 @@ func test_union_3(u u: MaybePair) {
 
   // CHECK: [[IS_RIGHT]]([[STR:%.*]] : $String):
   case .Right:
-  // CHECK:   release_value [[STR]] : $String
+  // CHECK:   destroy_value [[STR]] : $String
   // CHECK:   function_ref @_TF6switch1cFT_T_
   // CHECK:   br [[CONT]]
     c()
 
   // CHECK: [[DEFAULT]]:
   // -- Ensure the fully-opaque value is destroyed in the default case.
-  // CHECK:   release_value [[SUBJECT]] :
+  // CHECK:   destroy_value [[ARG_COPY]] :
   // CHECK:   function_ref @_TF6switch1dFT_T_
   // CHECK:   br [[CONT]]
 
@@ -697,14 +757,14 @@ func test_union_3(u u: MaybePair) {
   }
 
   // CHECK: [[CONT]]:
-  // CHECK-NOT: switch_enum [[SUBJECT]]
+  // CHECK-NOT: switch_enum [[ARG]]
   // CHECK:   function_ref @_TF6switch1eFT_T_
-  // CHECK:   release_value [[SUBJECT]]
+  // CHECK:   destroy_value [[ARG]]
   e()
 }
 
 // CHECK-LABEL: sil hidden  @_TF6switch12test_union_4FT1uOS_9MaybePair_T_
-func test_union_4(u u: MaybePair) {
+func test_union_4(u: MaybePair) {
   switch u {
   // CHECK: switch_enum {{%.*}} : $MaybePair,
   // CHECK:   case #MaybePair.Neither!enumelt: [[IS_NEITHER:bb[0-9]+]],
@@ -743,7 +803,7 @@ func test_union_4(u u: MaybePair) {
 }
 
 // CHECK-LABEL: sil hidden  @_TF6switch12test_union_5FT1uOS_9MaybePair_T_
-func test_union_5(u u: MaybePair) {
+func test_union_5(u: MaybePair) {
   switch u {
   // CHECK: switch_enum {{%.*}} : $MaybePair,
   // CHECK:   case #MaybePair.Neither!enumelt: [[IS_NEITHER:bb[0-9]+]],
@@ -789,7 +849,7 @@ enum MaybeAddressOnlyPair {
 }
 
 // CHECK-LABEL: sil hidden @_TF6switch22test_union_addr_only_1FT1uOS_20MaybeAddressOnlyPair_T_
-func test_union_addr_only_1(u u: MaybeAddressOnlyPair) {
+func test_union_addr_only_1(u: MaybeAddressOnlyPair) {
   switch u {
   // CHECK: switch_enum_addr [[ENUM_ADDR:%.*]] : $*MaybeAddressOnlyPair,
   // CHECK:   case #MaybeAddressOnlyPair.Neither!enumelt: [[IS_NEITHER:bb[0-9]+]],
@@ -813,9 +873,9 @@ func test_union_addr_only_1(u u: MaybeAddressOnlyPair) {
 
   // CHECK: [[IS_RIGHT]]:
   // CHECK:   [[STR_ADDR:%.*]] = unchecked_take_enum_data_addr [[ENUM_ADDR]] : $*MaybeAddressOnlyPair, #MaybeAddressOnlyPair.Right!enumelt.1
-  // CHECK:   [[STR:%.*]] = load [[STR_ADDR]]
+  // CHECK:   [[STR:%.*]] = load [take] [[STR_ADDR]]
   case .Right(_):
-  // CHECK:   release_value [[STR]] : $String
+  // CHECK:   destroy_value [[STR]] : $String
   // CHECK:   function_ref @_TF6switch1cFT_T_
   // CHECK:   br [[CONT]]
     c()
@@ -839,7 +899,7 @@ enum Generic<T, U> {
 }
 
 // Check that switching over a generic instance generates verified SIL.
-func test_union_generic_instance(u u: Generic<Int, String>) {
+func test_union_generic_instance(u: Generic<Int, String>) {
   switch u {
   case .Foo(var x):
     a()
@@ -852,7 +912,7 @@ func test_union_generic_instance(u u: Generic<Int, String>) {
 enum Foo { case A, B }
 
 // CHECK-LABEL: sil hidden @_TF6switch22test_switch_two_unionsFT1xOS_3Foo1yS0__T_
-func test_switch_two_unions(x x: Foo, y: Foo) {
+func test_switch_two_unions(x: Foo, y: Foo) {
   // CHECK:   [[T0:%.*]] = tuple (%0 : $Foo, %1 : $Foo)
   // CHECK:   [[X:%.*]] = tuple_extract [[T0]] : $(Foo, Foo), 0
   // CHECK:   [[Y:%.*]] = tuple_extract [[T0]] : $(Foo, Foo), 1
@@ -884,247 +944,9 @@ func test_switch_two_unions(x x: Foo, y: Foo) {
   }
 }
 
-struct StructPatternTest {
-  var x: Int
-  var y: String
-}
-
-// CHECK-LABEL: sil hidden @_TF6switch19test_struct_patternFT1sVS_17StructPatternTest_T_
-func test_struct_pattern(s s: StructPatternTest) {
-  switch s {
-  // CHECK:   [[X:%.*]] = struct_extract [[S:%.*]] : $StructPatternTest, #StructPatternTest.x
-  // CHECK:   [[Y:%.*]] = struct_extract [[S]] : $StructPatternTest, #StructPatternTest.y
-  // CHECK:   retain_value [[Y]]
-  // CHECK:   cond_br {{%.*}}, [[IS_CASE1:bb[0-9]+]], [[IS_NOT_CASE1:bb[0-9]+]]
-
-  // CHECK: [[IS_CASE1]]:
-  // CHECK:   release_value [[Y]]
-  // CHECK:   release_value [[S]]
-  case StructPatternTest(x: 0):
-  // CHECK:   function_ref @_TF6switch1aFT_T_
-  // CHECK:   br [[CONT:bb[0-9]+]]
-    a()
-
-  // CHECK: [[IS_NOT_CASE1]]:
-  // CHECK:   cond_br {{%.*}}, [[IS_CASE2:bb[0-9]+]], [[IS_NOT_CASE2:bb[0-9]+]]
-
-  // CHECK: [[IS_CASE2]]:
-  // CHECK:   release_value [[Y]]
-  // CHECK:   release_value [[S]]
-  case StructPatternTest(y: ""):
-  // CHECK:   function_ref @_TF6switch1bFT_T_
-  // CHECK:   br [[CONT]]
-    b()
-
-  // CHECK: [[IS_NOT_CASE2]]:
-  // CHECK:   release_value [[Y]]
-  // CHECK:   release_value [[S]]
-  case (StructPatternTest(x: _)):
-  // CHECK:   function_ref @_TF6switch1cFT_T_
-  // CHECK:   br [[CONT]]
-    c()
-  }
-  // CHECK: [[CONT]]:
-  // CHECK:   function_ref @_TF6switch1dFT_T_
-  d()
-}
-
-struct StructPatternTestAO {
-  var x: Int
-  var y: P
-}
-
-func ~=(a: P, b: P) -> Bool { return true }
-
-// CHECK-LABEL: sil hidden @_TF6switch22test_struct_pattern_aoFT1sVS_19StructPatternTestAO1pPS_1P__T_
-func test_struct_pattern_ao(s s: StructPatternTestAO, p: P) {
-  // CHECK:   [[S:%.*]] = alloc_stack $StructPatternTestAO
-  // CHECK:   copy_addr %0 to [initialization] [[S]]
-  // CHECK:   [[T0:%.*]] = struct_element_addr [[S]] : $*StructPatternTestAO, #StructPatternTestAO.x
-  // CHECK:   [[X:%.*]] = load [[T0]]
-  // CHECK:   [[T0:%.*]] = struct_element_addr [[S]] : $*StructPatternTestAO, #StructPatternTestAO.y
-  // CHECK:   [[Y:%.*]] = alloc_stack $P
-  // CHECK:   copy_addr [[T0]] to [initialization] [[Y]]
-  
-  switch s {
-  // CHECK:   cond_br {{%.*}}, [[IS_CASE1:bb[0-9]+]], [[IS_NOT_CASE1:bb[0-9]+]]
-  // CHECK: [[IS_CASE1]]:
-  // CHECK:   destroy_addr [[Y]]
-  // CHECK:   dealloc_stack [[Y]]
-  // CHECK:   destroy_addr [[S]]
-  // CHECK:   dealloc_stack [[S]]
-  case StructPatternTestAO(x: 0):
-  // CHECK:   function_ref @_TF6switch1aFT_T_
-  // CHECK:   br [[CONT:bb[0-9]+]]
-    a()
-
-  // CHECK: [[IS_NOT_CASE1]]:
-  // CHECK:   [[TEMP:%.*]] = alloc_stack $P
-  // CHECK:   copy_addr [[Y]] to [initialization] [[TEMP]]
-  // CHECK:   cond_br {{%.*}}, [[IS_CASE2:bb[0-9]+]], [[IS_NOT_CASE2:bb[0-9]+]]
-
-  // CHECK: [[IS_CASE2]]:
-  case StructPatternTestAO(y: p):
-  // CHECK:   destroy_addr [[TEMP]]
-  // CHECK:   dealloc_stack [[TEMP]]
-  // CHECK:   destroy_addr [[Y]]
-  // CHECK:   dealloc_stack [[Y]]
-  // CHECK:   destroy_addr [[S]]
-  // CHECK:   dealloc_stack [[S]]
-  // CHECK:   function_ref @_TF6switch1bFT_T_
-  // CHECK:   br [[CONT]]
-    b()
-
-  // CHECK: [[IS_NOT_CASE2]]:
-  // CHECK:   destroy_addr [[TEMP]]
-  // CHECK:   dealloc_stack [[TEMP]]
-  // CHECK:   br [[IS_CASE3:bb[0-9]+]]
-  // CHECK: [[IS_CASE3]]:
-  // CHECK:   destroy_addr [[Y]]
-  // CHECK:   dealloc_stack [[Y]]
-  // CHECK:   destroy_addr [[S]]
-  // CHECK:   dealloc_stack [[S]]
-  case StructPatternTestAO(x: _):
-  // CHECK:   function_ref @_TF6switch1cFT_T_
-  // CHECK:   br [[CONT]]
-    c()
-  }
-  // CHECK: [[CONT]]:
-  // CHECK:   function_ref @_TF6switch1dFT_T_
-  // CHECK:   destroy_addr %0 : $*StructPatternTestAO
-  d()
-}
-
-class ClassPatternTest {
-  var x: Int = 0
-  var y: String = ""
-}
-
-// CHECK-LABEL: sil hidden @_TF6switch18test_class_patternFT1kCS_16ClassPatternTest_T_
-// CHECK: bb0([[C:%.*]] : $ClassPatternTest):
-func test_class_pattern(k k: ClassPatternTest) {
-  switch k {
-  // CHECK: [[XM:%.*]] = class_method [[C]] : $ClassPatternTest, #ClassPatternTest.x!getter.1
-  // CHECK: [[X:%.*]]= apply [[XM:%.*]]([[C]])
-  // CHECK: [[YM:%.*]] = class_method [[C]] : $ClassPatternTest, #ClassPatternTest.y!getter.1
-  // CHECK: [[Y:%.*]]= apply [[YM:%.*]]([[C]])
-  // CHECK:   cond_br {{%.*}}, [[IS_CASE1:bb[0-9]+]], [[IS_NOT_CASE1:bb[0-9]+]]
-
-  // CHECK: [[IS_CASE1]]:
-  case ClassPatternTest(x: 0):
-  // CHECK:   release_value [[Y]]
-  // CHECK:   strong_release [[C]]
-  // CHECK:   function_ref @_TF6switch1aFT_T_
-  // CHECK:   br [[CONT:bb[0-9]+]]
-    a()
-
-  // CHECK: [[IS_NOT_CASE1]]:
-  // CHECK:   cond_br {{%.*}}, [[IS_CASE2:bb[0-9]+]], [[IS_NOT_CASE2:bb[0-9]+]]
-
-  // CHECK: [[IS_CASE2]]:
-  case ClassPatternTest(y: ""):
-  // CHECK:   release_value [[Y]]
-  // CHECK:   strong_release [[C]]
-  // CHECK:   function_ref @_TF6switch1bFT_T_
-  // CHECK:   br [[CONT]]
-    b()
-
-  // CHECK: [[IS_NOT_CASE2]]:
-  case ClassPatternTest(x: _):
-  // CHECK:   release_value [[Y]]
-  // CHECK:   strong_release [[C]]
-  // CHECK:   function_ref @_TF6switch1cFT_T_
-  // CHECK:   br [[CONT]]
-    c()
-  }
-  // CHECK: [[CONT]]:
-  // CHECK:   function_ref @_TF6switch1dFT_T_
-  d()
-}
-
-class SubclassTestA : ClassPatternTest {}
-class SubclassTestB : ClassPatternTest {}
-
-// CHECK-LABEL: sil hidden @{{.*}}test_class_pattern_with_isa_1
-// CHECK: bb0([[C:%.*]] : $ClassPatternTest):
-
-func test_class_pattern_with_isa_1(k k: ClassPatternTest) {
-  switch k {
-  // CHECK: [[XM:%.*]] = class_method %0 : $ClassPatternTest, #ClassPatternTest.x!getter.1
-  // CHECK: [[X:%.*]] = apply [[XM:%.*]](%0)
-  // CHECK:   cond_br {{%.*}}, [[IS_CASE1:bb[0-9]+]], [[IS_NOT_CASE1:bb[0-9]+]]
-
-  // CHECK: [[IS_CASE1]]:
-  case ClassPatternTest(x: 0):
-  // CHECK:   strong_release [[C]]
-  // CHECK:   function_ref @_TF6switch1aFT_T_
-  // CHECK:   br [[CONT:bb[0-9]+]]
-    a()
-
-  // CHECK: [[IS_NOT_CASE1]]:
-  // CHECK:   checked_cast_br [[C]] : $ClassPatternTest to $SubclassTestA, [[IS_A:bb[0-9]+]], [[IS_NOT_A:bb[0-9]+]]
-
-  // CHECK: [[IS_A]]([[A:%.*]] : $SubclassTestA):
-  case is SubclassTestA:
-  // CHECK:   strong_release %0
-  // CHECK:   function_ref @_TF6switch1bFT_T_
-  // CHECK:   br [[CONT]]
-    b()
-
-
-  // CHECK: [[IS_NOT_A]]:
-  // CHECK:   [[YM:%.*]] = class_method %0 : $ClassPatternTest, #ClassPatternTest.y!getter.1
-  // CHECK:   [[Y:%.*]] = apply [[YM:%.*]](%0)
-  // CHECK:   cond_br {{%.*}}, [[IS_CASE3:bb[0-9]+]], [[IS_NOT_CASE3:bb[0-9]+]]
-
-  // CHECK: [[IS_CASE3]]:
-  case ClassPatternTest(y: ""):
-  // CHECK:   release_value [[Y]]
-  // CHECK:   strong_release %0
-  // CHECK:   function_ref @_TF6switch1cFT_T_
-  // CHECK:   br [[CONT]]
-    c()
-
-  // CHECK: [[IS_NOT_CASE3]]:
-  // CHECK:   release_value [[Y]]
-  // CHECK:   checked_cast_br %0 : $ClassPatternTest to $SubclassTestB, [[IS_B:bb[0-9]+]], [[IS_NOT_B:bb[0-9]+]]
-
-  // CHECK: [[IS_B]]([[B:%.*]] : $SubclassTestB):
-  case is SubclassTestB:
-  // CHECK:   strong_release %0
-  // CHECK:   function_ref @_TF6switch1dFT_T_
-  // CHECK:   br [[CONT]]
-    d()
-
-  // CHECK: [[IS_NOT_B]]:
-  // CHECK:   strong_release %0
-  // CHECK:   unreachable
-  }
-
-  // CHECK: [[CONT]]:
-  // CHECK:   function_ref @_TF6switch1eFT_T_
-  e()
-}
-
-
-
-
-func test_class_pattern_with_isa_2(k k: ClassPatternTest) {
-  switch k {
-  case is SubclassTestA:
-    a()
-  case ClassPatternTest(x: 0):
-    b()
-  case is SubclassTestB:
-    c()
-  case ClassPatternTest(y: ""):
-    d()
-  }
-  e()
-}
 
 // <rdar://problem/14826416>
-func rdar14826416<T, U>(t t: T, u: U) {
+func rdar14826416<T, U>(t: T, u: U) {
   switch t {
   case is Int: markUsed("Int")
   case is U: markUsed("U")
@@ -1141,7 +963,7 @@ class Rdar14835992 {}
 class SubRdar14835992 : Rdar14835992 {}
 
 // CHECK-LABEL: sil hidden @_TF6switch12rdar14835992
-func rdar14835992<T, U>(t t: Rdar14835992, tt: T, uu: U) {
+func rdar14835992<T, U>(t: Rdar14835992, tt: T, uu: U) {
   switch t {
   case is SubRdar14835992: markUsed("Sub")
   case is T: markUsed("T")
@@ -1151,19 +973,7 @@ func rdar14835992<T, U>(t t: Rdar14835992, tt: T, uu: U) {
 }
 
 
-struct StructWithComputedProperty {
-  var foo: Int { return 0 }
-}
 
-// rdar://15859432
-// CHECK-LABEL: sil hidden @{{.*}}StructWithComputedProperty
-// CHECK: function_ref{{.*}}StructWithComputedProperty.foo.getter
-func testStructWithComputedProperty(s s : StructWithComputedProperty) {
-  switch s {
-  case StructWithComputedProperty(foo: let a):
-    markUsed(a)
-  }
-}
 
 // <rdar://problem/17272985>
 enum ABC { case A, B, C }
@@ -1213,7 +1023,7 @@ func testLabeledScalarPayload(_ lsp: LabeledScalarPayload) -> Any {
   // CHECK: bb1([[TUPLE:%.*]] : $(name: Int)):
   // CHECK:   [[X:%.*]] = tuple_extract [[TUPLE]]
   // CHECK:   [[ANY_X_ADDR:%.*]] = init_existential_addr {{%.*}}, $Int
-  // CHECK:   store [[X]] to [[ANY_X_ADDR]]
+  // CHECK:   store [[X]] to [trivial] [[ANY_X_ADDR]]
   case let .Payload(x):
     return x
   }

@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -250,7 +250,7 @@ void Mangler::mangleContext(const DeclContext *ctx) {
     auto ExtD = cast<ExtensionDecl>(ctx);
     auto ExtTy = ExtD->getExtendedType();
     // Recover from erroneous extension.
-    if (ExtTy.isNull() || ExtTy->is<ErrorType>())
+    if (ExtTy.isNull() || ExtTy->hasError())
       return mangleContext(ExtD->getDeclContext());
 
     auto decl = ExtTy->getAnyNominal();
@@ -361,10 +361,8 @@ void Mangler::bindGenericParameters(CanGenericSignature sig) {
 
 /// Bind the generic parameters from the given context and its parents.
 void Mangler::bindGenericParameters(const DeclContext *DC) {
-  if (auto sig = DC->getGenericSignatureOfContext()) {
-    Mod = DC->getParentModule();
-    bindGenericParameters(sig->getCanonicalManglingSignature(*Mod));
-  }
+  if (auto sig = DC->getGenericSignatureOfContext())
+    bindGenericParameters(sig->getCanonicalSignature());
 }
 
 static OperatorFixity getDeclFixity(const ValueDecl *decl) {
@@ -379,6 +377,26 @@ static OperatorFixity getDeclFixity(const ValueDecl *decl) {
   llvm_unreachable("bad UnaryOperatorKind");
 }
 
+/// Returns true if one of the ancestor DeclContexts of \p D is either marked
+/// private or is a local context.
+static bool isInPrivateOrLocalContext(const ValueDecl *D) {
+  const DeclContext *DC = D->getDeclContext();
+  if (!DC->isTypeContext()) {
+    assert((DC->isModuleScopeContext() || DC->isLocalContext()) &&
+           "unexpected context kind");
+    return DC->isLocalContext();
+  }
+
+  auto declaredType = DC->getDeclaredTypeOfContext();
+  if (!declaredType || declaredType->hasError())
+    return false;
+
+  auto *nominal = declaredType->getAnyNominal();
+  if (nominal->getFormalAccess() <= Accessibility::FilePrivate)
+    return true;
+  return isInPrivateOrLocalContext(nominal);
+}
+
 void Mangler::mangleDeclName(const ValueDecl *decl) {
   if (decl->getDeclContext()->isLocalContext()) {
     // Mangle local declarations with a numeric discriminator.
@@ -387,45 +405,28 @@ void Mangler::mangleDeclName(const ValueDecl *decl) {
     // Fall through to mangle the <identifier>.
 
   } else if (decl->hasAccessibility() &&
-             decl->getFormalAccess() == Accessibility::Private) {
+             decl->getFormalAccess() <= Accessibility::FilePrivate &&
+             !isInPrivateOrLocalContext(decl)) {
     // Mangle non-local private declarations with a textual discriminator
     // based on their enclosing file.
     // decl-name ::= 'P' identifier identifier
 
-    // Don't bother to use the private discriminator if the enclosing context
-    // is also private.
-    auto isWithinPrivateNominal = [](const Decl *D) -> bool {
-      const DeclContext *DC = D->getDeclContext();
-      if (!DC->isTypeContext()) {
-        assert((DC->isModuleScopeContext() || DC->isLocalContext()) &&
-               "do we need a private discriminator for this context?");
-        return false;
-      }
+    // The first <identifier> is a discriminator string unique to the decl's
+    // original source file.
+    auto topLevelContext = decl->getDeclContext()->getModuleScopeContext();
+    auto fileUnit = cast<FileUnit>(topLevelContext);
 
-      auto nominal = dyn_cast<NominalTypeDecl>(DC);
-      if (!nominal)
-        nominal = cast<ExtensionDecl>(DC)->getExtendedType()->getAnyNominal();
-      return nominal->getFormalAccess() == Accessibility::Private;
-    };
+    Identifier discriminator =
+      fileUnit->getDiscriminatorForPrivateValue(decl);
+    assert(!discriminator.empty());
+    assert(!isNonAscii(discriminator.str()) &&
+           "discriminator contains non-ASCII characters");
+    (void)isNonAscii;
+    assert(!clang::isDigit(discriminator.str().front()) &&
+           "not a valid identifier");
 
-    if (!isWithinPrivateNominal(decl)) {
-      // The first <identifier> is a discriminator string unique to the decl's
-      // original source file.
-      auto topLevelContext = decl->getDeclContext()->getModuleScopeContext();
-      auto fileUnit = cast<FileUnit>(topLevelContext);
-
-      Identifier discriminator =
-        fileUnit->getDiscriminatorForPrivateValue(decl);
-      assert(!discriminator.empty());
-      assert(!isNonAscii(discriminator.str()) &&
-             "discriminator contains non-ASCII characters");
-      (void) isNonAscii;
-      assert(!clang::isDigit(discriminator.str().front()) &&
-             "not a valid identifier");
-
-      Buffer << 'P';
-      mangleIdentifier(discriminator);
-    }
+    Buffer << 'P';
+    mangleIdentifier(discriminator);
     // Fall through to mangle the name.
   }
 
@@ -485,16 +486,21 @@ Type Mangler::getDeclTypeForMangling(const ValueDecl *decl,
                                 ArrayRef<Requirement> &requirements,
                                 SmallVectorImpl<Requirement> &requirementsBuf) {
   auto &C = decl->getASTContext();
-  if (!decl->hasType())
+  if (!decl->hasInterfaceType())
     return ErrorType::get(C);
 
+  // FIXME: Interface types for ParamDecls
   Type type = decl->getInterfaceType();
+  if (type->hasArchetype()) {
+    assert(isa<ParamDecl>(decl));
+    type = ArchetypeBuilder::mapTypeOutOfContext(
+        decl->getDeclContext(), type);
+  }
 
   initialParamDepth = 0;
   CanGenericSignature sig;
   if (auto gft = type->getAs<GenericFunctionType>()) {
-    assert(Mod);
-    sig = gft->getGenericSignature()->getCanonicalManglingSignature(*Mod);
+    sig = gft->getGenericSignature()->getCanonicalSignature();
     CurGenericSignature = sig;
     genericParams = sig->getGenericParams();
     requirements = sig->getRequirements();
@@ -507,7 +513,7 @@ Type Mangler::getDeclTypeForMangling(const ValueDecl *decl,
   }
 
   // Shed the 'self' type and generic requirements from method manglings.
-  if (isMethodDecl(decl) && type && !type->is<ErrorType>()) {
+  if (isMethodDecl(decl) && type && !type->hasError()) {
     // Drop the Self argument clause from the type.
     type = type->castTo<AnyFunctionType>()->getResult();
 
@@ -528,10 +534,6 @@ Type Mangler::getDeclTypeForMangling(const ValueDecl *decl,
       requirementsBuf.clear();
       for (auto &reqt : sig->getRequirements()) {
         switch (reqt.getKind()) {
-        case RequirementKind::WitnessMarker:
-          // Not needed for mangling.
-          continue;
-
         case RequirementKind::Conformance:
         case RequirementKind::Superclass:
           // We don't need the requirement if the constrained type is above the
@@ -637,9 +639,6 @@ mangle_requirements:
   // Mangle the requirements.
   for (auto &reqt : requirements) {
     switch (reqt.getKind()) {
-    case RequirementKind::WitnessMarker:
-      break;
-        
     case RequirementKind::Conformance:
       if (!didMangleRequirement) {
         Buffer << 'R';
@@ -679,8 +678,7 @@ mangle_requirements:
 }
 
 void Mangler::mangleGenericSignature(const GenericSignature *sig) {
-  assert(Mod);
-  auto canSig = sig->getCanonicalManglingSignature(*Mod);
+  auto canSig = sig->getCanonicalSignature();
   CurGenericSignature = canSig;
   mangleGenericSignatureParts(canSig->getGenericParams(), 0,
                               canSig->getRequirements());
@@ -938,37 +936,19 @@ void Mangler::mangleType(Type type, unsigned uncurryLevel) {
     Buffer << '_';
     return;
 
-  case TypeKind::UnboundGeneric: {
-    // We normally reject unbound types in IR-generation, but there
-    // are several occasions in which we'd like to mangle them in the
-    // abstract.
-    auto decl = cast<UnboundGenericType>(tybase)->getDecl();
-    mangleNominalType(cast<NominalTypeDecl>(decl));
-    return;
-  }
-
+  case TypeKind::UnboundGeneric:
   case TypeKind::Class:
   case TypeKind::Enum:
-  case TypeKind::Struct: {
-    return mangleNominalType(cast<NominalType>(tybase)->getDecl());
-  }
-
+  case TypeKind::Struct:
   case TypeKind::BoundGenericClass:
   case TypeKind::BoundGenericEnum:
   case TypeKind::BoundGenericStruct: {
-    // type ::= 'G' <type> <type>+ '_'
-    auto *boundType = cast<BoundGenericType>(tybase);
-    Buffer << 'G';
-    mangleNominalType(boundType->getDecl());
-    for (auto arg : boundType->getGenericArgs()) {
-      mangleType(arg, /*uncurry*/ 0);
-    }
-    Buffer << '_';
+    if (type->isSpecialized())
+      mangleBoundGenericType(type);
+    else
+      mangleNominalType(tybase->getAnyNominal());
     return;
   }
-
-  case TypeKind::PolymorphicFunction:
-    llvm_unreachable("should not be mangled");
 
   case TypeKind::SILFunction: {
     // <type> ::= 'XF' <impl-function-type>
@@ -991,7 +971,6 @@ void Mangler::mangleType(Type type, unsigned uncurryLevel) {
     // <impl-function-attribute> ::= 'Cc'             // C global function
     // <impl-function-attribute> ::= 'Cm'             // Swift method
     // <impl-function-attribute> ::= 'CO'             // ObjC method
-    // <impl-function-attribute> ::= 'N'              // noreturn
     // <impl-function-attribute> ::= 'g'              // pseudogeneric
     // <impl-function-attribute> ::= 'G'              // generic
     // <impl-parameter> ::= <impl-convention> <type>
@@ -1049,12 +1028,14 @@ void Mangler::mangleType(Type type, unsigned uncurryLevel) {
     case SILFunctionTypeRepresentation::Method:
       Buffer << "Cm";
       break;
+    case SILFunctionTypeRepresentation::Closure:
+      Buffer << "Ck";
+      break;
     case SILFunctionTypeRepresentation::WitnessMethod:
       Buffer << "Cw";
       break;
     }
     
-    if (fn->isNoReturn()) Buffer << 'N';
     if (fn->isPolymorphic()) {
       Buffer << (fn->isPseudogeneric() ? 'g' : 'G');
       mangleGenericSignature(fn->getGenericSignature());
@@ -1105,15 +1086,6 @@ void Mangler::mangleType(Type type, unsigned uncurryLevel) {
 
       mangleType(parent, 0);
       mangleIdentifier(archetype->getName());
-      addSubstitution(archetype);
-      return;
-    }
-    
-    // associated-type ::= 'Q' protocol-context
-    // Mangle the Self archetype of a protocol.
-    if (auto proto = archetype->getSelfProtocol()) {
-      Buffer << 'P';
-      mangleProtocolName(proto);
       addSubstitution(archetype);
       return;
     }
@@ -1330,6 +1302,46 @@ void Mangler::mangleNominalType(const NominalTypeDecl *decl) {
   addSubstitution(key);
 }
 
+static void
+collectBoundGenericArgs(Type type,
+                        SmallVectorImpl<SmallVector<Type, 2>> &genericArgs) {
+  if (auto *unboundType = type->getAs<UnboundGenericType>()) {
+    if (auto parent = unboundType->getParent())
+      collectBoundGenericArgs(parent, genericArgs);
+    genericArgs.push_back({});
+  } else if (auto *nominalType = type->getAs<NominalType>()) {
+    if (auto parent = nominalType->getParent())
+      collectBoundGenericArgs(parent, genericArgs);
+    genericArgs.push_back({});
+  } else {
+    auto *boundType = type->castTo<BoundGenericType>();
+    if (auto parent = boundType->getParent())
+      collectBoundGenericArgs(parent, genericArgs);
+
+    SmallVector<Type, 2> args;
+    for (auto arg : boundType->getGenericArgs())
+      args.push_back(arg);
+    genericArgs.push_back(args);
+  }
+}
+
+void Mangler::mangleBoundGenericType(Type type) {
+  // type ::= 'G' <type> (<type>+ '_')+
+  Buffer << 'G';
+  auto *nominal = type->getAnyNominal();
+  mangleNominalType(nominal);
+
+  SmallVector<SmallVector<Type, 2>, 2> genericArgs;
+  collectBoundGenericArgs(type, genericArgs);
+  assert(!genericArgs.empty());
+
+  for (auto args : genericArgs) {
+    for (auto arg : args)
+      mangleType(arg, /*uncurry*/ 0);
+    Buffer << '_';
+  }
+}
+
 void Mangler::mangleProtocolDecl(const ProtocolDecl *protocol) {
   Buffer << 'P';
   mangleContextOf(protocol);
@@ -1364,6 +1376,12 @@ bool Mangler::tryMangleStandardSubstitution(const NominalTypeDecl *decl) {
     return true;
   } else if (name == "Float") {
     Buffer << "Sf";
+    return true;
+  } else if (name == "UnsafeRawPointer") {
+    Buffer << "SV";
+    return true;
+  } else if (name == "UnsafeMutableRawPointer") {
+    Buffer << "Sv";
     return true;
   } else if (name == "UnsafePointer") {
     Buffer << "SP";
@@ -1460,6 +1478,7 @@ void Mangler::mangleClosureComponents(Type Ty, unsigned discriminator,
   if (!Ty)
     Ty = ErrorType::get(localContext->getASTContext());
 
+  Ty = ArchetypeBuilder::mapTypeOutOfContext(parentContext, Ty);
   mangleType(Ty->getCanonicalType(), /*uncurry*/ 0);
 }
 

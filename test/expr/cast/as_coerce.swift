@@ -1,4 +1,4 @@
-// RUN: %target-parse-verify-swift
+// RUN: %target-typecheck-verify-swift
 
 // Test the use of 'as' for type coercion (which requires no checking).
 @objc protocol P1 {
@@ -96,7 +96,7 @@ _ = "hello" as! String // expected-warning{{forced cast of 'String' to same type
 
 // <rdar://problem/19499340> QoI: Nimble as -> as! changes not covered by Fix-Its
 func f(_ x : String) {}
-f("what" as Any as String) // expected-error{{'Any' (aka 'protocol<>') is not convertible to 'String'; did you mean to use 'as!' to force downcast?}} {{17-19=as!}}
+f("what" as Any as String) // expected-error {{'Any' is not convertible to 'String'; did you mean to use 'as!' to force downcast?}} {{17-19=as!}}
 f(1 as String) // expected-error{{cannot convert value of type 'Int' to type 'String' in coercion}}
 
 // <rdar://problem/19650402> Swift compiler segfaults while running the annotation tests

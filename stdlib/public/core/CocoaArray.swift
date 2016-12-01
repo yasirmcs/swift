@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -61,12 +61,13 @@ internal struct _CocoaArrayWrapper : RandomAccessCollection {
     // subRange.upperBound items are stored contiguously.  This is an
     // acceptable conservative behavior, but could potentially be
     // optimized for other cases.
-    let contiguousCount = withUnsafeMutablePointer(&enumerationState) {
+    let contiguousCount = withUnsafeMutablePointer(to: &enumerationState) {
       self.buffer.countByEnumerating(with: $0, objects: nil, count: 0)
     }
     
     return contiguousCount >= subRange.upperBound
-      ? UnsafeMutablePointer<AnyObject>(enumerationState.itemsPtr!)
+      ? UnsafeMutableRawPointer(enumerationState.itemsPtr!)
+          .assumingMemoryBound(to: AnyObject.self)
         + subRange.lowerBound
       : nil
   }

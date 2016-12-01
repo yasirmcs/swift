@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -14,12 +14,12 @@
 func _stdlib_getPointer(_ x: OpaquePointer) -> OpaquePointer
 
 public func _opaqueIdentity<T>(_ x: T) -> T {
-  let ptr = UnsafeMutablePointer<T>(allocatingCapacity: 1)
-  ptr.initialize(with: x)
+  let ptr = UnsafeMutablePointer<T>.allocate(capacity: 1)
+  ptr.initialize(to: x)
   let result =
     UnsafeMutablePointer<T>(_stdlib_getPointer(OpaquePointer(ptr))).pointee
   ptr.deinitialize()
-  ptr.deallocateCapacity(1)
+  ptr.deallocate(capacity: 1)
   return result
 }
 

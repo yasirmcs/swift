@@ -3,6 +3,8 @@
 .. @raise litre.TestsAreMissing
 .. _ABI:
 
+.. highlight:: none
+
 The Swift ABI
 =============
 
@@ -27,7 +29,7 @@ Structs and tuples currently share the same layout algorithm, noted as the
 is as follows:
 
 - Start with a **size** of **0** and an **alignment** of **1**.
-- Iterate through the fields, in element order for tuples, or in ``var`` 
+- Iterate through the fields, in element order for tuples, or in ``var``
   declaration order for structs. For each field:
 
   * Update **size** by rounding up to the **alignment of the field**, that is,
@@ -39,7 +41,7 @@ is as follows:
     **alignment of the field**.
 
 - The final **size** and **alignment** are the size and alignment of the
-  aggregate. The **stride** of the type is the final **size** rounded up to 
+  aggregate. The **stride** of the type is the final **size** rounded up to
   **alignment**.
 
 Note that this differs from C or LLVM's normal layout rules in that *size*
@@ -259,9 +261,9 @@ enum in declaration order.
 Existential Container Layout
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Values of protocol type, protocol composition type, or "any" type
-(``protocol<>``) are laid out using **existential containers** (so-called
-because these types are "existential types" in type theory). 
+Values of protocol type, protocol composition type, or ``Any`` type are laid
+out using **existential containers** (so-called because these types are
+"existential types" in type theory).
 
 Opaque Existential Containers
 `````````````````````````````
@@ -346,8 +348,7 @@ All metadata records share a common header, with the following fields:
   * `Tuple metadata`_ has a kind of **9**.
   * `Function metadata`_ has a kind of **10**.
   * `Protocol metadata`_ has a kind of **12**. This is used for
-    protocol types, for protocol compositions, and for the "any" type
-    ``protocol<>``.
+    protocol types, for protocol compositions, and for the ``Any`` type.
   * `Metatype metadata`_ has a kind of **13**.
   * `Class metadata`_, instead of a kind, has an *isa pointer* in its kind slot,
     pointing to the class's metaclass record. This isa pointer is guaranteed
@@ -462,9 +463,9 @@ contain the following fields:
   `protocol descriptor`_ records, but are pre-calculated for convenience.
 
 - The **number of protocols** that make up the protocol composition is stored at
-  **offset 2**. For the "any" types ``protocol<>`` or ``protocol<class>``, this
+  **offset 2**. For the "any" types ``Any`` or ``Any : class``, this
   is zero. For a single-protocol type ``P``, this is one. For a protocol
-  composition type ``protocol<P, Q, ...>``, this is the number of protocols.
+  composition type ``P & Q & ...``, this is the number of protocols.
 
 - The **protocol descriptor vector** begins at **offset 3**. This is an inline
   array of pointers to the `protocol descriptor`_ for every protocol in the
@@ -564,7 +565,7 @@ for ``T``, ``U``, and ``V`` in succession, as if laid out in a C struct::
   };
 
 If we add protocol requirements to the parameters, for example,
-``<T: Runcible, U: protocol<Fungible, Ansible>, V>``, then the type's generic
+``<T: Runcible, U: Fungible & Ansible, V>``, then the type's generic
 parameter vector contains witness tables for those protocols, as if laid out::
 
   struct GenericParameterVector {
@@ -740,6 +741,7 @@ Globals
   global ::= 'Mm' type                   // class metaclass
   global ::= 'Mn' nominal-type           // nominal type descriptor
   global ::= 'Mp' protocol               // protocol descriptor
+  global ::= 'MR' remote-reflection-record // metadata for remote mirrors
   global ::= 'PA' .*                     // partial application forwarder
   global ::= 'PAo' .*                    // ObjC partial application forwarder
   global ::= 'w' value-witness-kind type // value witness
@@ -821,6 +823,10 @@ Globals
   addressor-kind ::= 'o'                 // owning addressor (native owner)
   addressor-kind ::= 'p'                 // pinning addressor (native owner)
 
+  remote-reflection-record ::= 'f' type                  // field descriptor
+  remote-reflection-record ::= 'a' protocol-conformance  // associated type descriptor
+  remote-reflection-record ::= 'b' type                  // builtin type descriptor
+
 An ``entity`` starts with a ``nominal-type-kind`` (``[COPV]``), a
 substitution (``[Ss]``) of a nominal type, or an ``entity-kind``
 (``[FIiv]``).
@@ -846,7 +852,7 @@ The first identifier in a ``<private-decl-name>`` is a string that represents
 the file the original declaration came from. It should be considered unique
 within the enclosing module. The second identifier is the name of the entity.
 
-Not all declarations marked ``private`` declarations will use the 
+Not all declarations marked ``private`` declarations will use the
 ``<private-decl-name>`` mangling; if the entity's context is enough to uniquely
 identify the entity, the simple ``identifier`` form is preferred.
 
@@ -923,7 +929,7 @@ Types
   type ::= 'b' type type                     // objc block function type
   type ::= 'c' type type                     // C function pointer type
   type ::= 'F' throws-annotation? type type  // function type
-  type ::= 'f' throws-annotation? type type  // uncurried function type  
+  type ::= 'f' throws-annotation? type type  // uncurried function type
   type ::= 'G' type <type>+ '_'              // generic type application
   type ::= 'K' type type                     // @auto_closure function type
   type ::= 'M' type                          // metatype without representation
@@ -1019,7 +1025,6 @@ mangled in to disambiguate.
   impl-function-attribute ::= 'Cm'            // compatible with Swift method
   impl-function-attribute ::= 'CO'            // compatible with ObjC method
   impl-function-attribute ::= 'Cw'            // compatible with protocol witness
-  impl-function-attribute ::= 'N'             // noreturn
   impl-function-attribute ::= 'G'             // generic
   impl-function-attribute ::= 'g'             // pseudogeneric
   impl-parameter ::= impl-convention type
@@ -1030,8 +1035,8 @@ types.  However, in some cases it is more useful to encode the exact
 implementation details of a function type.
 
 Any ``<impl-function-attribute>`` productions must appear in the order
-in which they are specified above: e.g. a noreturn C function is
-mangled with ``CcN``.  ``g`` and ``G`` are exclusive and mark the presence
+in which they are specified above: e.g. a pseudogeneric C function is
+mangled with ``Ccg``.  ``g`` and ``G`` are exclusive and mark the presence
 of a generic signature immediately following.
 
 Note that the convention and function-attribute productions do not
@@ -1222,6 +1227,8 @@ Predefined Substitutions
   known-nominal-type ::= 'Sd'                // Swift.Float64
   known-nominal-type ::= 'Sf'                // Swift.Float32
   known-nominal-type ::= 'Si'                // Swift.Int
+  known-nominal-type ::= 'SV'                // Swift.UnsafeRawPointer
+  known-nominal-type ::= 'Sv'                // Swift.UnsafeMutableRawPointer
   known-nominal-type ::= 'SP'                // Swift.UnsafePointer
   known-nominal-type ::= 'Sp'                // Swift.UnsafeMutablePointer
   known-nominal-type ::= 'SQ'                // Swift.ImplicitlyUnwrappedOptional

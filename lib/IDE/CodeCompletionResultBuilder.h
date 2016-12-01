@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -115,6 +115,11 @@ public:
           CodeCompletionString::Chunk::ChunkKind::AccessControlKeyword,
           "private ");
       break;
+    case Accessibility::FilePrivate:
+      addChunkWithTextNoCopy(
+          CodeCompletionString::Chunk::ChunkKind::AccessControlKeyword,
+          "fileprivate ");
+      break;
     case Accessibility::Internal:
       // 'internal' is the default, don't add it.
       break;
@@ -122,6 +127,11 @@ public:
       addChunkWithTextNoCopy(
           CodeCompletionString::Chunk::ChunkKind::AccessControlKeyword,
           "public ");
+      break;
+    case Accessibility::Open:
+      addChunkWithTextNoCopy(
+          CodeCompletionString::Chunk::ChunkKind::AccessControlKeyword,
+          "open ");
       break;
     }
   }
@@ -245,7 +255,7 @@ public:
                      DeclAttrParamKeyword, Name);
     if (NeedSpecify)
       addChunkWithText(CodeCompletionString::Chunk::ChunkKind::
-                       DeclAttrParamEqual, "=");
+                       DeclAttrParamColon, ": ");
     if (!Annotation.empty())
       addTypeAnnotation(Annotation);
   }
@@ -417,9 +427,10 @@ public:
     getLastChunk().setIsAnnotation();
   }
 
-  void addBraceStmtWithCursor() {
-    addChunkWithTextNoCopy(
-        CodeCompletionString::Chunk::ChunkKind::BraceStmtWithCursor, " {}");
+  void addBraceStmtWithCursor(StringRef Description = "") {
+    addChunkWithText(
+        CodeCompletionString::Chunk::ChunkKind::BraceStmtWithCursor,
+        Description);
   }
 
   void addWhitespace(StringRef space) {

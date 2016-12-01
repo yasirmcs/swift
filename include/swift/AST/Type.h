@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -42,25 +42,29 @@ class NormalProtocolConformance;
 enum OptionalTypeKind : unsigned;
 class ProtocolDecl;
 class StructDecl;
+class SubstitutableType;
+class SubstitutionMap;
 class TypeBase;
 class Type;
 class TypeWalker;
 
 /// \brief Type substitution mapping from substitutable types to their
 /// replacements.
-typedef llvm::DenseMap<TypeBase *, Type> TypeSubstitutionMap;
+typedef llvm::DenseMap<SubstitutableType *, Type> TypeSubstitutionMap;
 
 /// Flags that can be passed when substituting into a type.
 enum class SubstFlags {
   /// If a type cannot be produced because some member type is
-  /// missing, return the identity type rather than a null type.
-  IgnoreMissing = 0x01,
+  /// missing, place an 'error' type into the position of the base.
+  UseErrorType = 0x01,
   /// Allow substitutions to recurse into SILFunctionTypes.
   /// Normally, SILType::subst() should be used for lowered
   /// types, however in special cases where the substitution
   /// is just changing between contextual and interface type
   /// representations, using Type::subst() is allowed.
   AllowLoweredTypes = 0x02,
+  /// Map member types to their desugared witness type.
+  DesugarMemberTypes = 0x04,
 };
 
 /// Options for performing substitutions into a type.
@@ -88,6 +92,9 @@ enum class ForeignRepresentableKind : uint8_t {
   Object,
   /// This type is representable in the foreign language via bridging.
   Bridged,
+  /// This type is representable in the foreign language via bridging
+  /// of Error.
+  BridgedError,
   /// This type is representable in the foreign language via static
   /// bridging code, only (which is not available at runtime).
   StaticBridged,
@@ -156,7 +163,7 @@ public:
   /// Replace references to substitutable types with new, concrete types and
   /// return the substituted result.
   ///
-  /// \param module The module in which the substitution occurs.
+  /// \param module The module to use for conformance lookups.
   ///
   /// \param substitutions The mapping from substitutable types to their
   /// replacements.
@@ -164,8 +171,21 @@ public:
   /// \param options Options that affect the substitutions.
   ///
   /// \returns the substituted type, or a null type if an error occurred.
-  Type subst(ModuleDecl *module, TypeSubstitutionMap &substitutions,
-             SubstOptions options) const;
+  Type subst(ModuleDecl *module,
+             const TypeSubstitutionMap &substitutions,
+             SubstOptions options = None) const;
+
+  /// Replace references to substitutable types with new, concrete types and
+  /// return the substituted result.
+  ///
+  /// \param substitutions The mapping from substitutable types to their
+  /// replacements and conformances.
+  ///
+  /// \param options Options that affect the substitutions.
+  ///
+  /// \returns the substituted type, or a null type if an error occurred.
+  Type subst(const SubstitutionMap &substitutions,
+             SubstOptions options = None) const;
 
   bool isPrivateStdlibType(bool whitelistProtocols=true) const;
 
@@ -180,7 +200,30 @@ public:
 
   /// Get the canonical type, or return null if the type is null.
   CanType getCanonicalTypeOrNull() const; // in Types.h
-  
+
+  /// Computes the join between two types.
+  ///
+  /// The join of two types is the most specific type that is a supertype of
+  /// both \c type1 and \c type2, e.g., the least upper bound in the type
+  /// lattice. For example, given a simple class hierarchy as follows:
+  ///
+  /// \code
+  /// class A { }
+  /// class B : A { }
+  /// class C : A { }
+  /// class D { }
+  /// \endcode
+  ///
+  /// The join of B and C is A, the join of A and B is A. However, there is no
+  /// join of D and A (or D and B, or D and C) because there is no common
+  /// superclass. One would have to jump to an existential (e.g., \c AnyObject)
+  /// to find a common type.
+  /// 
+  /// \returns the join of the two types, if there is a concrete type that can
+  /// express the join, or a null type if the only join would be a more-general
+  /// existential type (e.g., \c Any).
+  static Type join(Type type1, Type type2);
+
 private:
   // Direct comparison is disabled for types, because they may not be canonical.
   void operator==(Type T) const = delete;
@@ -416,7 +459,11 @@ public:
   // in Decl.h
   explicit CanGenericSignature(GenericSignature *Signature);
   ArrayRef<CanTypeWrapper<GenericTypeParamType>> getGenericParams() const;
-  
+
+  /// Retrieve the canonical generic environment associated with this
+  /// generic signature.
+  GenericEnvironment *getGenericEnvironment(ModuleDecl &module) const;
+
   GenericSignature *operator->() const {
     return Signature;
   }
@@ -429,6 +476,7 @@ public:
     return Signature;
   }
 };
+
 } // end namespace swift
 
 namespace llvm {
@@ -495,6 +543,19 @@ namespace llvm {
       return swift::CanType((swift::TypeBase*)P);
     }
   };
+
+  template<>
+  class PointerLikeTypeTraits<swift::CanGenericSignature> {
+  public:
+    static inline swift::CanGenericSignature getFromVoidPointer(void *P) {
+      return swift::CanGenericSignature((swift::GenericSignature*)P);
+    }
+    static inline void *getAsVoidPointer(swift::CanGenericSignature S) {
+      return (void*)S.getPointer();
+    }
+    enum { NumLowBitsAvailable = swift::TypeAlignInBits };
+  };
+  
 } // end namespace llvm
 
 #endif

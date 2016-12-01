@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -64,6 +64,9 @@ def check_interface_is_ascii : Flag<["-"], "check-interface-ascii">,
 def json_request_path: Separate<["-"], "json-request-path">,
   HelpText<"path to read a request in JSON format">;
 
+def dont_print_request : Flag<["-"], "dont-print-request">,
+  HelpText<"Don't print the request">;
+
 def print_response_as_json : Flag<["-"], "print-response-as-json">,
   HelpText<"Print the response as JSON output">;
 
@@ -81,3 +84,9 @@ def synthesized_extension : Flag<["-"], "synthesized-extension">,
 
 def interested_usr : Separate<["-"], "interested-usr">,
   HelpText<"Interested USR to calculate the containing group">;
+
+def async : Flag<["-"], "async">,
+  HelpText<"Perform request asynchronously">;
+
+def end_pos : Separate<["-"], "end-pos">, HelpText<"line:col">;
+def end_pos_EQ : Joined<["-"], "end-pos=">, Alias<end_pos>;

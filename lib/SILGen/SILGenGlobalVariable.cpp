@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -26,7 +26,10 @@ SILGlobalVariable *SILGenModule::getSILGlobalVariable(VarDecl *gDecl,
                                                       ForDefinition_t forDef) {
   // First, get a mangled name for the declaration.
   std::string mangledName;
-  {
+
+  if (auto SILGenName = gDecl->getAttrs().getAttribute<SILGenNameAttr>()) {
+    mangledName = SILGenName->Name;
+  } else {
     Mangler mangler;
     mangler.mangleGlobalVariableFull(gDecl);
     mangledName = mangler.finalize();
@@ -98,15 +101,16 @@ SILGenFunction::emitGlobalVariableRef(SILLocation loc, VarDecl *var) {
                               {}, {});
     // FIXME: It'd be nice if the result of the accessor was natively an
     // address.
-    addr = B.createPointerToAddress(loc, addr,
-                             getLoweredType(var->getType()).getAddressType());
+    addr = B.createPointerToAddress(
+      loc, addr, getLoweredType(var->getType()).getAddressType(),
+      /*isStrict*/ true);
     return ManagedValue::forLValue(addr);
   }
 
   // Global variables can be accessed directly with global_addr.  Emit this
   // instruction into the prolog of the function so we can memoize/CSE it in
   // VarLocs.
-  auto entryBB = getFunction().getBlocks().begin();
+  auto entryBB = getFunction().begin();
   SILGenBuilder prologueB(*this, entryBB, entryBB->begin());
   prologueB.setTrackingList(B.getTrackingList());
 

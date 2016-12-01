@@ -1,4 +1,4 @@
-// RUN: %swift -parse -verify -parse-stdlib -target i386-apple-tvos9.0 %s
+// RUN: %swift -typecheck -verify -parse-stdlib -target i386-apple-tvos9.0 %s
 
 @available(tvOS, introduced: 1.0, deprecated: 2.0, obsoleted: 9.0,
               message: "you don't want to do that anyway")
@@ -70,7 +70,7 @@ if #available(iOS 9.1, tvOS 9.2, *) {
 if #available(iOS 8.0, tvOS 9.2, *) {
 }
 
-if #available(iOS 9.2, tvOS 8.0, *) { // expected-warning {{unnecessary check for 'tvOS'; minimum deployment target ensures guard will always be true}}
+if #available(iOS 9.2, tvOS 8.0, *) { // no-warning
 }
 
 

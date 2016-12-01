@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -38,6 +38,11 @@ class IRBuilder : public IRBuilderBase {
   /// ordering.
   llvm::BasicBlock *ClearedIP;
 
+#ifndef NDEBUG
+  /// Whether debug information is requested. Only used in assertions.
+  bool DebugInfo;
+#endif
+
   // Set calling convention of the call instruction using
   // the same calling convention as the callee function.
   // This ensures that they are always compatible.
@@ -50,8 +55,12 @@ class IRBuilder : public IRBuilderBase {
   }
 
 public:
-  IRBuilder(llvm::LLVMContext &Context)
-    : IRBuilderBase(Context), ClearedIP(nullptr) {}
+  IRBuilder(llvm::LLVMContext &Context, bool DebugInfo)
+    : IRBuilderBase(Context), ClearedIP(nullptr)
+#ifndef NDEBUG
+    , DebugInfo(DebugInfo)
+#endif
+    {}
 
   /// Determines if the current location is apparently reachable.  The
   /// invariant we maintain is that the insertion point of the builder
@@ -259,6 +268,7 @@ public:
   llvm::CallInst *CreateCall(llvm::Value *Callee, ArrayRef<llvm::Value *> Args,
                              const Twine &Name = "",
                              llvm::MDNode *FPMathTag = nullptr) {
+    assert((!DebugInfo || getCurrentDebugLocation()) && "no debugloc on call");
     auto Call = IRBuilderBase::CreateCall(Callee, Args, Name, FPMathTag);
     setCallingConvUsingCallee(Call);
     return Call;
@@ -268,6 +278,7 @@ public:
                              ArrayRef<llvm::Value *> Args,
                              const Twine &Name = "",
                              llvm::MDNode *FPMathTag = nullptr) {
+    assert((!DebugInfo || getCurrentDebugLocation()) && "no debugloc on call");
     auto Call = IRBuilderBase::CreateCall(FTy, Callee, Args, Name, FPMathTag);
     setCallingConvUsingCallee(Call);
     return Call;
@@ -277,6 +288,7 @@ public:
                              ArrayRef<llvm::Value *> Args,
                              const Twine &Name = "",
                              llvm::MDNode *FPMathTag = nullptr) {
+    assert((!DebugInfo || getCurrentDebugLocation()) && "no debugloc on call");
     auto Call = IRBuilderBase::CreateCall(Callee, Args, Name, FPMathTag);
     setCallingConvUsingCallee(Call);
     return Call;

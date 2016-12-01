@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -34,6 +34,7 @@ namespace swift {
   class CompilerInstance;
   class CompilerInvocation;
   class Decl;
+  class Type;
   class AbstractStorageDecl;
   class SourceFile;
   class ValueDecl;
@@ -46,6 +47,7 @@ namespace ide {
   enum class SyntaxNodeKind : uint8_t;
   enum class SyntaxStructureKind : uint8_t;
   enum class SyntaxStructureElementKind : uint8_t;
+  enum class RangeKind : int8_t;
   class CodeCompletionConsumer;
 }
 }
@@ -55,6 +57,7 @@ namespace SourceKit {
   typedef RefPtr<ImmutableTextSnapshot> ImmutableTextSnapshotRef;
   class SwiftASTManager;
   class SwiftLangSupport;
+  class Context;
 
 class SwiftEditorDocument :
     public ThreadSafeRefCountedBase<SwiftEditorDocument> {
@@ -251,6 +254,8 @@ public:
                                            swift::index::SymbolSubKindSet subKinds,
                                            bool isRef);
 
+  static SourceKit::UIdent getUIDForRangeKind(swift::ide::RangeKind Kind);
+
   static std::vector<UIdent> UIDsFromDeclAttributes(const swift::DeclAttributes &Attrs);
 
 
@@ -259,6 +264,14 @@ public:
   /// Generate a USR for a Decl, including the prefix.
   /// \returns true if the results should be ignored, false otherwise.
   static bool printUSR(const swift::ValueDecl *D, llvm::raw_ostream &OS);
+
+  /// Generate a USR for the Type of a given decl.
+  /// \returns true if the results should be ignored, false otherwise.
+  static bool printDeclTypeUSR(const swift::ValueDecl *D, llvm::raw_ostream &OS);
+
+  /// Generate a USR for of a given type.
+  /// \returns true if the results should be ignored, false otherwise.
+  static bool printTypeUSR(swift::Type Ty, llvm::raw_ostream &OS);
 
   /// Generate a USR for an accessor, including the prefix.
   /// \returns true if the results should be ignored, false otherwise.
@@ -330,6 +343,10 @@ public:
                            bool SynthesizedExtensions,
                            Optional<StringRef> InterestedUSR) override;
 
+  void editorOpenTypeInterface(EditorConsumer &Consumer,
+                               ArrayRef<const char *> Args,
+                               StringRef TypeUSR) override;
+
   void editorOpenHeaderInterface(EditorConsumer &Consumer,
                                  StringRef Name,
                                  StringRef HeaderName,
@@ -362,6 +379,10 @@ public:
   void getCursorInfo(StringRef Filename, unsigned Offset,
                      ArrayRef<const char *> Args,
                      std::function<void(const CursorInfo &)> Receiver) override;
+
+  void getRangeInfo(StringRef Filename, unsigned Offset, unsigned Length,
+                    ArrayRef<const char *> Args,
+                    std::function<void(const RangeInfo&)> Receiver) override;
 
   void getCursorInfoFromUSR(
       StringRef Filename, StringRef USR, ArrayRef<const char *> Args,

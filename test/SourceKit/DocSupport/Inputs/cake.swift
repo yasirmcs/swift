@@ -14,7 +14,7 @@ public class C1 : Prot {
   public subscript(index i: Float) -> Int { return 0 }
 }
 
-public func genfoo<T1 : Prot, T2 : C1 where T1.Element == Int, T2.Element == T1.Element>(x ix: T1, y iy: T2) {}
+public func genfoo<T1 : Prot, T2 : C1>(x ix: T1, y iy: T2) where T1.Element == Int, T2.Element == T1.Element {}
 
 public extension Prot where Self.Element == Int {
   final func extfoo() {}
@@ -51,4 +51,26 @@ public extension S1 {
 @objc
 public protocol P2 {
   @objc optional func foo1()
+}
+
+public protocol P3 {
+  associatedtype T
+}
+
+public struct S2 : P3 {
+  public typealias T = S2
+}
+
+public extension C1 {
+  public enum C1Cases : Int {
+  case case1
+  }
+}
+
+public class C2 : C1 {
+  public func C2foo() {}
+}
+
+public extension Prot {
+  subscript(index: Int) -> Int { return 0 }
 }

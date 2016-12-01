@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -40,7 +40,7 @@
 ///   value returned by passing the previous element to `next`.
 ///
 /// - SeeAlso: `sequence(state:next:)`
-public func sequence<T>(first: T, next: (T) -> T?) -> UnfoldFirstSequence<T> {
+public func sequence<T>(first: T, next: @escaping (T) -> T?) -> UnfoldFirstSequence<T> {
   // The trivial implementation where the state is the next value to return
   // has the downside of being unnecessarily eager (it evaluates `next` one
   // step in advance). We solve this by using a boolean value to disambiguate
@@ -86,7 +86,7 @@ public func sequence<T>(first: T, next: (T) -> T?) -> UnfoldFirstSequence<T> {
 /// - Returns: A sequence that yields each successive value from `next`.
 ///
 /// - SeeAlso: `sequence(first:next:)`
-public func sequence<T, State>(state: State, next: (inout State) -> T?)
+public func sequence<T, State>(state: State, next: @escaping (inout State) -> T?)
   -> UnfoldSequence<T, State> {
   return UnfoldSequence(_state: state, _next: next)
 }
@@ -115,7 +115,7 @@ public struct UnfoldSequence<Element, State> : Sequence, IteratorProtocol {
     }
   }
 
-  internal init(_state: State, _next: (inout State) -> Element?) {
+  internal init(_state: State, _next: @escaping (inout State) -> Element?) {
     self._state = _state
     self._next = _next
   }

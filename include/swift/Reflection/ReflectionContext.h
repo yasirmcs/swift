@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -92,17 +92,14 @@ public:
         // Figure out where the stored properties of this class begin
         // by looking at the size of the superclass
         bool valid;
-        unsigned size, align;
-        auto super =
-            this->readSuperClassFromClassMetadata(MetadataAddress);
-        if (super) {
-          std::tie(valid, size, align) =
-              this->readInstanceSizeAndAlignmentFromClassMetadata(super);
+        unsigned start;
+        std::tie(valid, start) =
+            this->readInstanceStartAndAlignmentFromClassMetadata(MetadataAddress);
 
-          // Perform layout
-          if (valid)
-            TI = TC.getClassInstanceTypeInfo(TR, size, align);
-        }
+        // Perform layout
+        if (valid)
+          TI = TC.getClassInstanceTypeInfo(TR, start);
+
         break;
       }
       default:
@@ -162,7 +159,7 @@ public:
     }
 
     case MetadataKind::ErrorObject:
-      // ErrorProtocol boxed existential on non-Objective-C runtime target
+      // Error boxed existential on non-Objective-C runtime target
       return nullptr;
 
     default:
@@ -190,7 +187,8 @@ public:
     // Class existentials have trivial layout.
     // It is itself the pointer to the instance followed by the witness tables.
     case RecordKind::ClassExistential:
-      *OutInstanceTR = getBuilder().getTypeConverter().getUnknownObjectTypeRef();
+      // This is just Builtin.UnknownObject
+      *OutInstanceTR = ExistentialRecordTI->getFields()[0].TR;
       *OutInstanceAddress = ExistentialAddress;
       return true;
 
@@ -300,7 +298,7 @@ public:
         return false;
 
       // Now we need to skip over the instance metadata pointer and instance's
-      // conformance pointer for Swift.ErrorProtocol.
+      // conformance pointer for Swift.Error.
       StoredPointer InstanceAddress = InstanceMetadataAddressAddress +
         2 * sizeof(StoredPointer);
 
@@ -342,11 +340,13 @@ private:
       return nullptr;
 
     // Initialize the builder.
-    Builder.addField(OffsetToFirstCapture.second, sizeof(StoredPointer));
+    Builder.addField(OffsetToFirstCapture.second, sizeof(StoredPointer),
+                     /*numExtraInhabitants=*/0);
 
     // Skip the closure's necessary bindings struct, if it's present.
     auto SizeOfNecessaryBindings = Info.NumBindings * sizeof(StoredPointer);
-    Builder.addField(SizeOfNecessaryBindings, sizeof(StoredPointer));
+    Builder.addField(SizeOfNecessaryBindings, sizeof(StoredPointer),
+                     /*numExtraInhabitants=*/0);
 
     // FIXME: should be unordered_set but I'm too lazy to write a hash
     // functor

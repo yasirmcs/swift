@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -67,6 +67,7 @@ static DeclRefExpr *convertEnumToIndex(SmallVectorImpl<ASTNode> &stmts,
   auto indexVar = new (C) VarDecl(/*static*/false, /*let*/false,
                                   SourceLoc(), C.getIdentifier(indexName),
                                   intType, funcDecl);
+  indexVar->setInterfaceType(intType);
   indexVar->setImplicit();
   
   // generate: var indexVar
@@ -144,20 +145,35 @@ static void deriveBodyEquatable_enum_eq(AbstractFunctionDecl *eqDecl) {
                                            bParam, eqDecl, "index_b");
   
   // Generate the compare of the indices.
-  FuncDecl *cmpFunc = C.getEqualIntDecl(nullptr);
+  FuncDecl *cmpFunc = C.getEqualIntDecl();
   assert(cmpFunc && "should have a == for int as we already checked for it");
   
-  auto fnType = dyn_cast<FunctionType>(cmpFunc->getType()->getCanonicalType());
+  auto fnType = cast<FunctionType>(cmpFunc->getInterfaceType()
+      ->getCanonicalType());
+
+  Expr *cmpFuncExpr;
+  if (cmpFunc->getDeclContext()->isTypeContext()) {
+    auto contextTy = cmpFunc->getDeclContext()->getSelfInterfaceType();
+    Expr *base = TypeExpr::createImplicitHack(SourceLoc(), contextTy, C);
+    Expr *ref = new (C) DeclRefExpr(cmpFunc, DeclNameLoc(), /*Implicit*/ true,
+                                    AccessSemantics::Ordinary, fnType);
+
+    fnType = cast<FunctionType>(fnType.getResult());
+    cmpFuncExpr = new (C) DotSyntaxCallExpr(ref, SourceLoc(), base, fnType);
+    cmpFuncExpr->setImplicit();
+  } else {
+    cmpFuncExpr = new (C) DeclRefExpr(cmpFunc, DeclNameLoc(),
+                                      /*implicit*/ true,
+                                      AccessSemantics::Ordinary,
+                                      fnType);
+  }
+
   auto tType = fnType.getInput();
-  
   TupleExpr *abTuple = TupleExpr::create(C, SourceLoc(), { aIndex, bIndex },
                                          { }, { }, SourceLoc(),
                                          /*HasTrailingClosure*/ false,
                                          /*Implicit*/ true, tType);
-  auto *cmpFuncExpr = new (C) DeclRefExpr(cmpFunc, DeclNameLoc(),
-                                          /*implicit*/ true,
-                                          AccessSemantics::Ordinary,
-                                          cmpFunc->getType());
+
   auto *cmpExpr = new (C) BinaryExpr(cmpFuncExpr, abTuple, /*implicit*/ true,
                                      boolTy);
   statements.push_back(new (C) ReturnStmt(SourceLoc(), cmpExpr));
@@ -171,23 +187,23 @@ static ValueDecl *
 deriveEquatable_enum_eq(TypeChecker &tc, Decl *parentDecl, EnumDecl *enumDecl) {
   // enum SomeEnum<T...> {
   //   case A, B, C
-  // }
-  // @derived
-  // func ==<T...>(a: SomeEnum<T...>, b: SomeEnum<T...>) -> Bool {
-  //   var index_a: Int
-  //   switch a {
-  //   case .A: index_a = 0
-  //   case .B: index_a = 1
-  //   case .C: index_a = 2
+  //
+  //   @derived
+  //   func ==(a: SomeEnum<T...>, b: SomeEnum<T...>) -> Bool {
+  //     var index_a: Int
+  //     switch a {
+  //     case .A: index_a = 0
+  //     case .B: index_a = 1
+  //     case .C: index_a = 2
+  //     }
+  //     var index_b: Int
+  //     switch b {
+  //     case .A: index_b = 0
+  //     case .B: index_b = 1
+  //     case .C: index_b = 2
+  //     }
+  //     return index_a == index_b
   //   }
-  //   var index_b: Int
-  //   switch b {
-  //   case .A: index_b = 0
-  //   case .B: index_b = 1
-  //   case .C: index_b = 2
-  //   }
-  //   return index_a == index_b
-  // }
   
   ASTContext &C = tc.Context;
   
@@ -199,26 +215,30 @@ deriveEquatable_enum_eq(TypeChecker &tc, Decl *parentDecl, EnumDecl *enumDecl) {
                              Identifier(), SourceLoc(), C.getIdentifier(s),
                              enumTy, parentDC);
   };
-  
-  auto params = ParameterList::create(C, {
-    getParamDecl("a"),
-    getParamDecl("b")
-  });
-  
-  auto genericParams = parentDC->getGenericParamsOfContext();
-  auto boolTy = C.getBoolDecl()->getDeclaredType();
-  auto moduleDC = parentDecl->getModuleContext();
 
-  DeclName name(C, C.Id_EqualsOperator, params);
+  auto selfDecl = ParamDecl::createUnboundSelf(SourceLoc(), parentDC);
+  
+  ParameterList *params[] = {
+    ParameterList::createWithoutLoc(selfDecl),
+    ParameterList::create(C, {
+        getParamDecl("a"),
+        getParamDecl("b")
+    })
+  };
+
+  auto boolTy = C.getBoolDecl()->getDeclaredType();
+
+  DeclName name(C, C.Id_EqualsOperator, params[1]);
   auto eqDecl =
-    FuncDecl::create(C, /*StaticLoc=*/SourceLoc(), StaticSpellingKind::None,
+    FuncDecl::create(C, /*StaticLoc=*/SourceLoc(),
+                     StaticSpellingKind::KeywordStatic,
                      /*FuncLoc=*/SourceLoc(), name, /*NameLoc=*/SourceLoc(),
                      /*Throws=*/false, /*ThrowsLoc=*/SourceLoc(),
                      /*AccessorKeywordLoc=*/SourceLoc(),
-                     genericParams,
-                     params, Type(),
+                     /*GenericParams=*/nullptr,
+                     params,
                      TypeLoc::withoutLoc(boolTy),
-                     &moduleDC->getDerivedFileUnit());
+                     parentDC);
   eqDecl->setImplicit();
   eqDecl->getAttrs().add(new (C) InfixAttr(/*implicit*/false));
   auto op = C.getStdlibModule()->lookupInfixOperator(C.Id_EqualsOperator);
@@ -227,40 +247,39 @@ deriveEquatable_enum_eq(TypeChecker &tc, Decl *parentDecl, EnumDecl *enumDecl) {
                 diag::broken_equatable_eq_operator);
     return nullptr;
   }
-  if (!C.getEqualIntDecl(nullptr)) {
+  if (!C.getEqualIntDecl()) {
     tc.diagnose(parentDecl->getLoc(), diag::no_equal_overload_for_int);
     return nullptr;
   }
 
+  // Fill in the 'self' type.
+  Type selfTy = eqDecl->computeSelfType();
+  selfDecl->overwriteType(selfTy);
+
   eqDecl->setOperatorDecl(op);
-  eqDecl->setDerivedForTypeDecl(enumDecl);
   eqDecl->setBodySynthesizer(&deriveBodyEquatable_enum_eq);
 
   // Compute the type.
-  auto paramsTy = params->getType(C);
-  Type fnTy;
-  if (genericParams)
-    fnTy = PolymorphicFunctionType::get(paramsTy, boolTy, genericParams);
-  else
-    fnTy = FunctionType::get(paramsTy, boolTy);
-  eqDecl->setType(fnTy);
+  Type paramsTy = params[1]->getType(tc.Context);
 
   // Compute the interface type.
   Type interfaceTy;
+  Type selfIfaceTy = eqDecl->computeInterfaceSelfType(false);
   if (auto genericSig = parentDC->getGenericSignatureOfContext()) {
-    eqDecl->setGenericSignature(genericSig);
+    eqDecl->setGenericEnvironment(parentDC->getGenericEnvironmentOfContext());
 
-    auto enumIfaceTy = parentDC->getDeclaredInterfaceType();
+    Type enumIfaceTy = parentDC->getDeclaredInterfaceType();
     TupleTypeElt ifaceParamElts[] = {
       enumIfaceTy, enumIfaceTy,
     };
     auto ifaceParamsTy = TupleType::get(ifaceParamElts, C);
-    
-    interfaceTy = GenericFunctionType::get(
-                                     genericSig, ifaceParamsTy, boolTy,
-                                     AnyFunctionType::ExtInfo());
+    interfaceTy = FunctionType::get(ifaceParamsTy, boolTy,
+                                    AnyFunctionType::ExtInfo());
+    interfaceTy = GenericFunctionType::get(genericSig, selfIfaceTy, interfaceTy,
+                                           AnyFunctionType::ExtInfo());
   } else {
     interfaceTy = FunctionType::get(paramsTy, boolTy);
+    interfaceTy = FunctionType::get(selfIfaceTy, interfaceTy);
   }
   eqDecl->setInterfaceType(interfaceTy);
 
@@ -275,8 +294,8 @@ deriveEquatable_enum_eq(TypeChecker &tc, Decl *parentDecl, EnumDecl *enumDecl) {
   if (enumDecl->hasClangNode())
     tc.Context.addExternalDecl(eqDecl);
   
-  // Since it's an operator we insert the decl after the type at global scope.
-  insertOperatorDecl(C, cast<IterableDeclContext>(parentDecl), eqDecl);
+  // Add the operator to the parent scope.
+  cast<IterableDeclContext>(parentDecl)->addMember(eqDecl);
 
   return eqDecl;
 }
@@ -349,7 +368,7 @@ deriveHashable_enum_hashValue(TypeChecker &tc, Decl *parentDecl,
   Type intType = C.getIntDecl()->getDeclaredType();
   
   // We can't form a Hashable conformance if Int isn't Hashable or
-  // IntegerLiteralConvertible.
+  // ExpressibleByIntegerLiteral.
   if (!tc.conformsToProtocol(intType,C.getProtocol(KnownProtocolKind::Hashable),
                              enumDecl, None)) {
     tc.diagnose(enumDecl->getLoc(), diag::broken_int_hashable_conformance);
@@ -357,7 +376,7 @@ deriveHashable_enum_hashValue(TypeChecker &tc, Decl *parentDecl,
   }
 
   ProtocolDecl *intLiteralProto =
-      C.getProtocol(KnownProtocolKind::IntegerLiteralConvertible);
+      C.getProtocol(KnownProtocolKind::ExpressibleByIntegerLiteral);
   if (!tc.conformsToProtocol(intType, intLiteralProto, enumDecl, None)) {
     tc.diagnose(enumDecl->getLoc(),
                 diag::broken_int_integer_literal_convertible_conformance);
@@ -378,36 +397,28 @@ deriveHashable_enum_hashValue(TypeChecker &tc, Decl *parentDecl,
                        /*Throws=*/false, /*ThrowsLoc=*/SourceLoc(),
                        /*AccessorKeywordLoc=*/SourceLoc(),
                        /*GenericParams=*/nullptr, params,
-                       Type(), TypeLoc::withoutLoc(intType), parentDC);
+                       TypeLoc::withoutLoc(intType), parentDC);
   getterDecl->setImplicit();
   getterDecl->setBodySynthesizer(deriveBodyHashable_enum_hashValue);
 
   // Compute the type of hashValue().
-  GenericParamList *genericParams = getterDecl->getGenericParamsOfContext();
   Type methodType = FunctionType::get(TupleType::getEmpty(tc.Context), intType);
   Type selfType = getterDecl->computeSelfType();
   selfDecl->overwriteType(selfType);
-  
-  Type type;
-  if (genericParams)
-    type = PolymorphicFunctionType::get(selfType, methodType, genericParams);
-  else
-    type = FunctionType::get(selfType, methodType);
-  getterDecl->setType(type);
-  getterDecl->setBodyResultType(intType);
-  
+
   // Compute the interface type of hashValue().
   Type interfaceType;
   Type selfIfaceType = getterDecl->computeInterfaceSelfType(false);
   if (auto sig = parentDC->getGenericSignatureOfContext()) {
-    getterDecl->setGenericSignature(sig);
+    getterDecl->setGenericEnvironment(parentDC->getGenericEnvironmentOfContext());
     interfaceType = GenericFunctionType::get(sig, selfIfaceType, methodType,
                                              AnyFunctionType::ExtInfo());
   } else
     interfaceType = FunctionType::get(selfType, methodType);
   
   getterDecl->setInterfaceType(interfaceType);
-  getterDecl->setAccessibility(enumDecl->getFormalAccess());
+  getterDecl->setAccessibility(std::max(Accessibility::Internal,
+                                        enumDecl->getFormalAccess()));
 
   // If the enum was not imported, the derived conformance is either from the
   // enum itself or an extension, in which case we will emit the declaration
@@ -421,9 +432,10 @@ deriveHashable_enum_hashValue(TypeChecker &tc, Decl *parentDecl,
                                            SourceLoc(), C.Id_hashValue,
                                            intType, parentDC);
   hashValueDecl->setImplicit();
+  hashValueDecl->setInterfaceType(intType);
   hashValueDecl->makeComputed(SourceLoc(), getterDecl,
                               nullptr, nullptr, SourceLoc());
-  hashValueDecl->setAccessibility(enumDecl->getFormalAccess());
+  hashValueDecl->setAccessibility(getterDecl->getFormalAccess());
 
   Pattern *hashValuePat = new (C) NamedPattern(hashValueDecl, /*implicit*/true);
   hashValuePat->setType(intType);

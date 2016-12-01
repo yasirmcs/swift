@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -61,6 +61,7 @@ FormalLinkage swift::getDeclLinkage(const ValueDecl *D) {
 
   switch (D->getEffectiveAccess()) {
   case Accessibility::Public:
+  case Accessibility::Open:
     return FormalLinkage::PublicUnique;
   case Accessibility::Internal:
     // If we're serializing all function bodies, type metadata for internal
@@ -69,6 +70,7 @@ FormalLinkage swift::getDeclLinkage(const ValueDecl *D) {
         == ResilienceStrategy::Fragile)
       return FormalLinkage::PublicUnique;
     return FormalLinkage::HiddenUnique;
+  case Accessibility::FilePrivate:
   case Accessibility::Private:
     // Why "hidden" instead of "private"? Because the debugger may need to
     // access these symbols.
@@ -86,9 +88,6 @@ FormalLinkage swift::getTypeLinkage(CanType type) {
     // For any nominal type reference, look at the type declaration.
     if (auto nominal = type->getAnyNominal())
       result ^= getDeclLinkage(nominal);
-
-    assert(!isa<PolymorphicFunctionType>(type) &&
-           "Don't expect a polymorphic function type here");
 
     return false; // continue searching
   });
@@ -145,6 +144,7 @@ swift::getLinkageForProtocolConformance(const NormalProtocolConformance *C,
   // FIXME: This should be using std::min(protocol's access, type's access).
   switch (C->getProtocol()->getEffectiveAccess()) {
     case Accessibility::Private:
+    case Accessibility::FilePrivate:
       return (definition ? SILLinkage::Private : SILLinkage::PrivateExternal);
 
     case Accessibility::Internal:

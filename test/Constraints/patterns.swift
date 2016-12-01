@@ -1,11 +1,11 @@
-// RUN: %target-parse-verify-swift
+// RUN: %target-typecheck-verify-swift
 
 // Leaf expression patterns are matched to corresponding pieces of a switch
 // subject (TODO: or ~= expression) using ~= overload resolution.
 switch (1, 2.5, "three") {
 case (1, _, _):
   ()
-// Double is IntegerLiteralConvertible
+// Double is ExpressibleByIntegerLiteral
 case (_, 2, _),
      (_, 2.5, _),
      (_, _, "three"):
@@ -127,11 +127,27 @@ case let x?: break
 case nil: break
 }
 
+func SR2066(x: Int?) {
+    // nil literals should still work when wrapped in parentheses
+    switch x {
+    case (nil): break
+    case _?: break
+    }
+    switch x {
+    case ((nil)): break
+    case _?: break
+    }
+    switch (x, x) {
+    case ((nil), _): break
+    case (_?, _): break
+    }
+}
+
 // Test x???? patterns.
 switch (nil as Int???) {
 case let x???: print(x, terminator: "")
-case let x??: print(x, terminator: "")
-case let x?: print(x, terminator: "")
+case let x??: print(x as Any, terminator: "")
+case let x?: print(x as Any, terminator: "")
 case 4???: break
 case nil??: break
 case nil?: break
@@ -146,7 +162,7 @@ default: break
 
 
 // Test some value patterns.
-let x : Int? = nil
+let x : Int?
 
 extension Int {
   func method() -> Int { return 42 }
@@ -206,14 +222,14 @@ func good(_ a: A<EE>) -> Int {
 }
 
 func bad(_ a: A<EE>) {
-  a.map { // expected-error {{generic parameter 'T' could not be inferred}}
+  a.map { // expected-error {{unable to infer complex closure return type; add explicit type to disambiguate}} {{10-10= () -> Int in }}
     let _: EE = $0
     return 1
   }
 }
 
 func ugly(_ a: A<EE>) {
-  a.map { // expected-error {{generic parameter 'T' could not be inferred}}
+  a.map { // expected-error {{unable to infer complex closure return type; add explicit type to disambiguate}} {{10-10= () -> Int in }}
     switch $0 {
     case .A:
       return 1
@@ -222,3 +238,13 @@ func ugly(_ a: A<EE>) {
     }
   }
 }
+
+// SR-2057
+
+enum SR2057 {
+  case foo
+}
+
+let sr2057: SR2057?
+if case .foo = sr2057 { } // expected-error{{enum case 'foo' not found in type 'SR2057?'}}
+

@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -92,6 +92,28 @@ struct ClosureContextInfo {
   void dump(std::ostream &OS) const;
 };
 
+struct FieldTypeInfo {
+  std::string Name;
+  const TypeRef *TR;
+  bool Indirect;
+
+  FieldTypeInfo() : Name(""), TR(nullptr), Indirect(false) {}
+  FieldTypeInfo(const std::string &Name, const TypeRef *TR, bool Indirect)
+      : Name(Name), TR(TR), Indirect(Indirect) {}
+
+  static FieldTypeInfo forEmptyCase(std::string Name) {
+    return FieldTypeInfo(Name, nullptr, false);
+  }
+
+  static FieldTypeInfo forIndirectCase(std::string Name, const TypeRef *TR) {
+    return FieldTypeInfo(Name, TR, true);
+  }
+
+  static FieldTypeInfo forField(std::string Name, const TypeRef *TR) {
+    return FieldTypeInfo(Name, TR, false);
+  }
+};
+
 /// An implementation of MetadataReader's BuilderType concept for
 /// building TypeRefs, and parsing field metadata from any images
 /// it has been made aware of.
@@ -115,6 +137,10 @@ private:
   /// Makes sure dynamically allocated TypeRefs stick around for the life of
   /// this TypeRefBuilder and are automatically released.
   std::vector<std::unique_ptr<const TypeRef>> TypeRefPool;
+
+  /// Cache for associated type lookups.
+  std::unordered_map<TypeRefID, const TypeRef *,
+                     TypeRefID::Hash, TypeRefID::Equal> AssociatedTypeCache;
 
   TypeConverter TC;
   MetadataSourceBuilder MSB;
@@ -268,25 +294,27 @@ public:
   }
 
 private:
-
   std::vector<ReflectionInfo> ReflectionInfos;
-
-  const AssociatedTypeDescriptor *
-  lookupAssociatedTypes(const std::string &MangledTypeName,
-                        const DependentMemberTypeRef *DependentMember);
 
 public:
   TypeConverter &getTypeConverter() { return TC; }
 
   const TypeRef *
-  getDependentMemberTypeRef(const std::string &MangledTypeName,
-                            const DependentMemberTypeRef *DependentMember);
+  lookupTypeWitness(const std::string &MangledTypeName,
+                    const std::string &Member,
+                    const TypeRef *Protocol);
+
+  const TypeRef *
+  lookupSuperclass(const std::string &MangledTypeName);
+
+  const TypeRef *
+  lookupSuperclass(const TypeRef *TR);
 
   /// Load unsubstituted field types for a nominal type.
   const FieldDescriptor *getFieldTypeInfo(const TypeRef *TR);
 
   /// Get the parsed and substituted field types for a nominal type.
-  std::vector<std::pair<std::string, const TypeRef *>>
+  std::vector<FieldTypeInfo>
   getFieldTypeRefs(const TypeRef *TR, const FieldDescriptor *FD);
 
   /// Get the primitive type lowering for a builtin type.

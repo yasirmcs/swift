@@ -1,4 +1,4 @@
-// RUN: %target-parse-verify-swift
+// RUN: %target-typecheck-verify-swift
 
 struct IntRange<Int> : Sequence, IteratorProtocol {
   typealias Element = (Int, Int)
@@ -30,7 +30,7 @@ func for_each(r: Range<Int>, iir: IntRange<Int>) { // expected-note 2 {{did you 
   }
 
   // Parse errors
-  for i r { // expected-error 2{{expected ';' in 'for' statement}} expected-error {{use of unresolved identifier 'i'}} expected-error {{type 'Range<Int>' does not conform to protocol 'Boolean'}}
+  for i r { // expected-error 2{{expected ';' in 'for' statement}} expected-error {{use of unresolved identifier 'i'}} expected-error {{'Range<Int>' is not convertible to 'Bool'}}
   }
   for i in CountableRange(r) sum = sum + i; // expected-error{{expected '{' to start the body of for-each loop}}
 }

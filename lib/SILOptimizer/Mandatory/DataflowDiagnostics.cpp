@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -39,25 +39,20 @@ static void diagnoseMissingReturn(const UnreachableInst *UI,
   Type ResTy;
 
   if (auto *FD = FLoc.getAsASTNode<FuncDecl>()) {
-    ResTy = FD->getResultType();
+    ResTy = FD->getResultInterfaceType();
   } else if (auto *CE = FLoc.getAsASTNode<ClosureExpr>()) {
     ResTy = CE->getResultType();
   } else {
     llvm_unreachable("unhandled case in MissingReturn");
   }
 
-  bool isNoReturn = F->getLoweredFunctionType()->isNoReturn();
-
-  // No action required if the function returns 'Void' or that the
-  // function is marked 'noreturn'.
-  if (ResTy->isVoid() || isNoReturn)
-    return;
-
   SILLocation L = UI->getLoc();
   assert(L && ResTy);
+  auto diagID = F->isNoReturnFunction() ? diag::missing_never_call
+                                        : diag::missing_return;
   diagnose(Context,
            L.getEndSourceLoc(),
-           diag::missing_return, ResTy,
+           diagID, ResTy,
            FLoc.isASTNode<ClosureExpr>() ? 1 : 0);
 }
 
@@ -100,24 +95,6 @@ static void diagnoseUnreachable(const SILInstruction *I,
   }
 }
 
-static void diagnoseReturn(const SILInstruction *I, ASTContext &Context) {
-  auto *TI = dyn_cast<TermInst>(I);
-  if (!TI || !(isa<BranchInst>(TI) || isa<ReturnInst>(TI)))
-    return;
-
-  const SILBasicBlock *BB = TI->getParent();
-  const SILFunction *F = BB->getParent();
-
-  // Warn if we reach a return inside a noreturn function.
-  if (F->getLoweredFunctionType()->isNoReturn()) {
-    SILLocation L = TI->getLoc();
-    if (L.is<ReturnLocation>())
-      diagnose(Context, L.getSourceLoc(), diag::return_from_noreturn);
-    if (L.is<ImplicitReturnLocation>())
-      diagnose(Context, L.getSourceLoc(), diag::return_from_noreturn);
-  }
-}
-
 /// \brief Issue diagnostics whenever we see Builtin.static_report(1, ...).
 static void diagnoseStaticReports(const SILInstruction *I,
                                   SILModule &M) {
@@ -151,7 +128,6 @@ class EmitDFDiagnostics : public SILFunctionTransform {
     for (auto &BB : *getFunction())
       for (auto &I : BB) {
         diagnoseUnreachable(&I, M.getASTContext());
-        diagnoseReturn(&I, M.getASTContext());
         diagnoseStaticReports(&I, M);
       }
   }

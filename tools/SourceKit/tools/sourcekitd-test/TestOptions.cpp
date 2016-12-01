@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -61,15 +61,15 @@ static std::pair<unsigned, unsigned> parseLineCol(StringRef LineCol) {
   unsigned Line, Col;
   size_t ColonIdx = LineCol.find(':');
   if (ColonIdx == StringRef::npos) {
-    llvm::errs() << "wrong pos format, it should be '<line>:<column'\n";
+    llvm::errs() << "wrong pos format, it should be '<line>:<column>'\n";
     exit(1);
   }
   if (LineCol.substr(0, ColonIdx).getAsInteger(10, Line)) {
-    llvm::errs() << "wrong pos format, it should be '<line>:<column'\n";
+    llvm::errs() << "wrong pos format, it should be '<line>:<column>'\n";
     exit(1);
   }
   if (LineCol.substr(ColonIdx+1).getAsInteger(10, Col)) {
-    llvm::errs() << "wrong pos format, it should be '<line>:<column'\n";
+    llvm::errs() << "wrong pos format, it should be '<line>:<column>'\n";
     exit(1);
   }
 
@@ -130,6 +130,7 @@ bool TestOptions::parseArgs(llvm::ArrayRef<const char *> Args) {
         .Case("print-diags", SourceKitRequest::PrintDiags)
         .Case("extract-comment", SourceKitRequest::ExtractComment)
         .Case("module-groups", SourceKitRequest::ModuleGroups)
+        .Case("range", SourceKitRequest::RangeInfo)
         .Default(SourceKitRequest::None);
       if (Request == SourceKitRequest::None) {
         llvm::errs() << "error: invalid request, expected one of "
@@ -137,7 +138,7 @@ bool TestOptions::parseArgs(llvm::ArrayRef<const char *> Args) {
                "complete.update/complete.cache.ondisk/complete.cache.setpopularapi/"
                "cursor/related-idents/syntax-map/structure/format/expand-placeholder/"
                "doc-info/sema/interface-gen/interface-gen-openfind-usr/find-interface/"
-               "open/edit/print-annotations/print-diags/extract-comment/module-groups\n";
+               "open/edit/print-annotations/print-diags/extract-comment/module-groups/range\n";
         return true;
       }
       break;
@@ -160,6 +161,13 @@ bool TestOptions::parseArgs(llvm::ArrayRef<const char *> Args) {
       auto linecol = parseLineCol(InputArg->getValue());
       Line = linecol.first;
       Col = linecol.second;
+      break;
+    }
+
+    case OPT_end_pos: {
+      auto linecol = parseLineCol(InputArg->getValue());
+      EndLine = linecol.first;
+      EndCol = linecol.second;
       break;
     }
 
@@ -216,6 +224,10 @@ bool TestOptions::parseArgs(llvm::ArrayRef<const char *> Args) {
       CheckInterfaceIsASCII = true;
       break;
 
+    case OPT_dont_print_request:
+      PrintRequest = false;
+      break;
+
     case OPT_print_response_as_json:
       PrintResponseAsJSON = true;
       break;
@@ -242,11 +254,21 @@ bool TestOptions::parseArgs(llvm::ArrayRef<const char *> Args) {
       SynthesizedExtensions = true;
       break;
 
+    case OPT_async:
+      isAsyncRequest = true;
+      break;
+
     case OPT_UNKNOWN:
       llvm::errs() << "error: unknown argument: "
                    << InputArg->getAsString(ParsedArgs) << '\n';
       return true;
     }
+  }
+
+  if (Request == SourceKitRequest::InterfaceGenOpen && isAsyncRequest) {
+    llvm::errs()
+        << "error: cannot use -async with interface-gen-open request\n";
+    return true;
   }
 
   return false;

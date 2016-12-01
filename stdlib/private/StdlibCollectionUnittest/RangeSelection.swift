@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -19,6 +19,7 @@ public enum RangeSelection {
   case middle
   case leftHalf
   case rightHalf
+  case full
   case offsets(Int, Int)
 
   public var isEmpty: Bool {
@@ -45,6 +46,8 @@ public enum RangeSelection {
         let start = c.index(c.startIndex, offsetBy: c.count / 2)
         let end = c.endIndex
         return start..<end
+      case .full:
+        return c.startIndex..<c.endIndex
       case let .offsets(lowerBound, upperBound):
         let start = c.index(c.startIndex, offsetBy: numericCast(lowerBound))
         let end = c.index(c.startIndex, offsetBy: numericCast(upperBound))
@@ -75,6 +78,9 @@ public enum RangeSelection {
         let start = c.index(c.startIndex, offsetBy: c.count / 2)
         let beforeEnd = c.index(c.startIndex, offsetBy: c.count - 1)
         return start...beforeEnd
+      case .full:
+        let beforeEnd = c.index(c.startIndex, offsetBy: c.count - 1)
+        return c.startIndex...beforeEnd
       case let .offsets(lowerBound, upperBound):
         let start = c.index(c.startIndex, offsetBy: numericCast(lowerBound))
         let end = c.index(c.startIndex, offsetBy: numericCast(upperBound))

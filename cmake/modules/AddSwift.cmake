@@ -1,3 +1,6 @@
+include(SwiftList)
+include(SwiftXcodeSupport)
+
 # SWIFTLIB_DIR is the directory in the build tree where Swift resource files
 # should be placed.  Note that $CMAKE_CFG_INTDIR expands to "." for
 # single-configuration builds.
@@ -5,23 +8,6 @@ set(SWIFTLIB_DIR
     "${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}/lib/swift")
 set(SWIFTSTATICLIB_DIR
     "${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}/lib/swift_static")
-
-function(_list_add_string_suffix input_list suffix result_var_name)
-  set(result)
-  foreach(element ${input_list})
-    list(APPEND result "${element}${suffix}")
-  endforeach()
-  set("${result_var_name}" "${result}" PARENT_SCOPE)
-endfunction()
-
-function(_list_escape_for_shell input_list result_var_name)
-  set(result "")
-  foreach(element ${input_list})
-    string(REPLACE " " "\\ " element "${element}")
-    set(result "${result}${element} ")
-  endforeach()
-  set("${result_var_name}" "${result}" PARENT_SCOPE)
-endfunction()
 
 function(add_dependencies_multiple_targets)
   cmake_parse_arguments(
@@ -62,6 +48,44 @@ function(_compute_lto_flag option out_var)
   endif()
 endfunction()
 
+function(_set_target_prefix_and_suffix target kind sdk)
+  precondition(target MESSAGE "target is required")
+  precondition(kind MESSAGE "kind is required")
+  precondition(sdk MESSAGE "sdk is required")
+
+  if("${sdk}" STREQUAL "ANDROID")
+    if("${kind}" STREQUAL "STATIC")
+      set_property(TARGET "${target}" PROPERTY PREFIX "lib")
+      set_property(TARGET "${target}" PROPERTY SUFFIX ".a")
+    elseif("${libkind}" STREQUAL "SHARED")
+      set_property(TARGET "${target}" PROPERTY PREFIX "lib")
+      set_property(TARGET "${target}" PROPERTY SUFFIX ".so")
+    endif()
+  elseif("${sdk}" STREQUAL "WINDOWS")
+    if("${kind}" STREQUAL "STATIC")
+      set_property(TARGET "${target}" PROPERTY PREFIX "lib")
+      set_property(TARGET "${target}" PROPERTY SUFFIX ".lib")
+    elseif("${libkind}" STREQUAL "SHARED")
+      set_property(TARGET "${target}" PROPERTY PREFIX "")
+      set_property(TARGET "${target}" PROPERTY SUFFIX ".dll")
+    endif()
+  endif()
+endfunction()
+
+function(is_darwin_based_sdk sdk_name out_var)
+  if ("${sdk_name}" STREQUAL "OSX" OR
+      "${sdk_name}" STREQUAL "IOS" OR
+      "${sdk_name}" STREQUAL "IOS_SIMULATOR" OR
+      "${sdk_name}" STREQUAL "TVOS" OR
+      "${sdk_name}" STREQUAL "TVOS_SIMULATOR" OR
+      "${sdk_name}" STREQUAL "WATCHOS" OR
+      "${sdk_name}" STREQUAL "WATCHOS_SIMULATOR")
+    set(${out_var} TRUE PARENT_SCOPE)
+  else()
+    set(${out_var} FALSE PARENT_SCOPE)
+  endif()
+endfunction()
+
 # Usage:
 # _add_variant_c_compile_link_flags(
 #   SDK sdk
@@ -70,52 +94,74 @@ endfunction()
 #   ENABLE_LTO enable_lto
 #   ANALYZE_CODE_COVERAGE analyze_code_coverage
 #   RESULT_VAR_NAME result_var_name
-#   DEPLOYMENT_VERSION_IOS deployment_version_ios # If provided, overrides the default value of the iOS deployment target set by the Swift project for this compilation only.
-# 
+#   DEPLOYMENT_VERSION_OSX version # If provided, overrides the default value of the OSX deployment target set by the Swift project for this compilation only.
+#   DEPLOYMENT_VERSION_IOS version
+#   DEPLOYMENT_VERSION_TVOS version
+#   DEPLOYMENT_VERSION_WATCHOS version
+#
 # )
 function(_add_variant_c_compile_link_flags)
-  set(oneValueArgs SDK ARCH BUILD_TYPE RESULT_VAR_NAME ENABLE_LTO ANALYZE_CODE_COVERAGE DEPLOYMENT_VERSION_IOS)
+  set(oneValueArgs SDK ARCH BUILD_TYPE RESULT_VAR_NAME ENABLE_LTO ANALYZE_CODE_COVERAGE
+    DEPLOYMENT_VERSION_OSX DEPLOYMENT_VERSION_IOS DEPLOYMENT_VERSION_TVOS DEPLOYMENT_VERSION_WATCHOS)
   cmake_parse_arguments(CFLAGS
     ""
     "${oneValueArgs}"
     ""
     ${ARGN})
-  
+
   set(result
     ${${CFLAGS_RESULT_VAR_NAME}}
     "-target" "${SWIFT_SDK_${CFLAGS_SDK}_ARCH_${CFLAGS_ARCH}_TRIPLE}")
 
-  list(APPEND result
-    "-isysroot" "${SWIFT_SDK_${CFLAGS_SDK}_PATH}")
+  is_darwin_based_sdk("${CFLAGS_SDK}" IS_DARWIN)
+  if(IS_DARWIN)
+    list(APPEND result "-isysroot" "${SWIFT_SDK_${CFLAGS_SDK}_PATH}")
+  else()
+    if(NOT "${SWIFT_SDK_${CFLAGS_SDK}_PATH}" STREQUAL "/")
+      list(APPEND result "--sysroot=${SWIFT_SDK_${CFLAGS_SDK}_PATH}")
+    endif()
+  endif()
 
   if("${CFLAGS_SDK}" STREQUAL "ANDROID")
     list(APPEND result
       "--sysroot=${SWIFT_ANDROID_SDK_PATH}"
       # Use the linker included in the Android NDK.
-      "-B" "${SWIFT_ANDROID_NDK_PATH}/toolchains/arm-linux-androideabi-${SWIFT_ANDROID_NDK_GCC_VERSION}/prebuilt/linux-x86_64/arm-linux-androideabi/bin/")
+      "-B" "${SWIFT_ANDROID_PREBUILT_PATH}/arm-linux-androideabi/bin/")
   endif()
 
+  if("${CFLAGS_SDK}" STREQUAL "WINDOWS")
+    list(APPEND result "-DLLVM_ON_WIN32")
+    list(APPEND result "-D_CRT_SECURE_NO_WARNINGS")
+    # TODO(compnerd) handle /MT
+    list(APPEND result "-D_DLL")
+    list(APPEND result "-fms-compatibility-version=1900")
+  endif()
 
-  if("${CMAKE_SYSTEM_NAME}" STREQUAL "Darwin")
-    
-    # Check if there's a specific iOS deployment version needed for this invocation
-    if("${CFLAGS_SDK}" STREQUAL "IOS" OR "${CFLAGS_SDK}" STREQUAL "IOS_SIMULATOR")
+  if(IS_DARWIN)
+    # Check if there's a specific OS deployment version needed for this invocation
+    if("${CFLAGS_SDK}" STREQUAL "OSX")
+      set(DEPLOYMENT_VERSION ${CFLAGS_DEPLOYMENT_VERSION_OSX})
+    elseif("${CFLAGS_SDK}" STREQUAL "IOS" OR "${CFLAGS_SDK}" STREQUAL "IOS_SIMULATOR")
       set(DEPLOYMENT_VERSION ${CFLAGS_DEPLOYMENT_VERSION_IOS})
+    elseif("${CFLAGS_SDK}" STREQUAL "TVOS" OR "${CFLAGS_SDK}" STREQUAL "TVOS_SIMULATOR")
+      set(DEPLOYMENT_VERSION ${CFLAGS_DEPLOYMENT_VERSION_TVOS})
+    elseif("${CFLAGS_SDK}" STREQUAL "WATCHOS" OR "${CFLAGS_SDK}" STREQUAL "WATCHOS_SIMULATOR")
+      set(DEPLOYMENT_VERSION ${CFLAGS_DEPLOYMENT_VERSION_WATCHOS})
     endif()
-    
+
     if("${DEPLOYMENT_VERSION}" STREQUAL "")
       set(DEPLOYMENT_VERSION "${SWIFT_SDK_${CFLAGS_SDK}_DEPLOYMENT_VERSION}")
     endif()
-    
+
     list(APPEND result
       "-arch" "${CFLAGS_ARCH}"
       "-F" "${SWIFT_SDK_${CFLAGS_SDK}_PATH}/../../../Developer/Library/Frameworks"
       "-m${SWIFT_SDK_${CFLAGS_SDK}_VERSION_MIN_NAME}-version-min=${DEPLOYMENT_VERSION}")
-      
-    if(CFLAGS_ANALYZE_CODE_COVERAGE)
-      list(APPEND result "-fprofile-instr-generate"
-                         "-fcoverage-mapping")
-    endif()
+  endif()
+
+  if(CFLAGS_ANALYZE_CODE_COVERAGE)
+    list(APPEND result "-fprofile-instr-generate"
+                       "-fcoverage-mapping")
   endif()
 
   _compute_lto_flag("${CFLAGS_ENABLE_LTO}" _lto_flag_out)
@@ -127,7 +173,9 @@ function(_add_variant_c_compile_link_flags)
 endfunction()
 
 function(_add_variant_c_compile_flags)
-  set(oneValueArgs SDK ARCH BUILD_TYPE ENABLE_ASSERTIONS ANALYZE_CODE_COVERAGE DEPLOYMENT_VERSION_IOS RESULT_VAR_NAME ENABLE_LTO)
+  set(oneValueArgs SDK ARCH BUILD_TYPE ENABLE_ASSERTIONS ANALYZE_CODE_COVERAGE
+    DEPLOYMENT_VERSION_OSX DEPLOYMENT_VERSION_IOS DEPLOYMENT_VERSION_TVOS DEPLOYMENT_VERSION_WATCHOS
+    RESULT_VAR_NAME ENABLE_LTO)
   cmake_parse_arguments(CFLAGS
     ""
     "${oneValueArgs}"
@@ -143,7 +191,10 @@ function(_add_variant_c_compile_flags)
     ENABLE_ASSERTIONS "${CFLAGS_ENABLE_ASSERTIONS}"
     ENABLE_LTO "${CFLAGS_ENABLE_LTO}"
     ANALYZE_CODE_COVERAGE FALSE
+    DEPLOYMENT_VERSION_OSX "${CFLAGS_DEPLOYMENT_VERSION_OSX}"
     DEPLOYMENT_VERSION_IOS "${CFLAGS_DEPLOYMENT_VERSION_IOS}"
+    DEPLOYMENT_VERSION_TVOS "${CFLAGS_DEPLOYMENT_VERSION_TVOS}"
+    DEPLOYMENT_VERSION_WATCHOS "${CFLAGS_DEPLOYMENT_VERSION_WATCHOS}"
     RESULT_VAR_NAME result)
 
   is_build_type_optimized("${CFLAGS_BUILD_TYPE}" optimized)
@@ -170,6 +221,18 @@ function(_add_variant_c_compile_flags)
     list(APPEND result "-g0")
   endif()
 
+  if("${CFLAGS_SDK}" STREQUAL "WINDOWS")
+    list(APPEND result -Xclang;--dependent-lib=oldnames)
+    # TODO(compnerd) handle /MT, /MTd, /MD, /MDd
+    if("${CMAKE_BUILD_TYPE}" STREQUAL "RELEASE")
+      list(APPEND result "-D_MD")
+      list(APPEND result -Xclang;--dependent-lib=msvcrt)
+    else()
+      list(APPEND result "-D_MDd")
+      list(APPEND result -Xclang;--dependent-lib=msvcrtd)
+    endif()
+  endif()
+
   if(CFLAGS_ENABLE_ASSERTIONS)
     list(APPEND result "-UNDEBUG")
   else()
@@ -182,9 +245,11 @@ function(_add_variant_c_compile_flags)
   endif()
 
   if("${CFLAGS_SDK}" STREQUAL "ANDROID")
+    # FIXME: Instead of hardcoding paths in the Android NDK, these paths should
+    #        be passed in via ENV, as with the Windows build.
     list(APPEND result
-        "-I${SWIFT_ANDROID_NDK_PATH}/sources/cxx-stl/llvm-libc++/libcxx/include"
-        "-I${SWIFT_ANDROID_NDK_PATH}/sources/cxx-stl/llvm-libc++abi/libcxxabi/include"
+        "-I${SWIFT_ANDROID_NDK_PATH}/sources/cxx-stl/llvm-libc++/include"
+        "-I${SWIFT_ANDROID_NDK_PATH}/sources/cxx-stl/llvm-libc++abi/include"
         "-I${SWIFT_ANDROID_NDK_PATH}/sources/android/support/include")
   endif()
 
@@ -200,7 +265,8 @@ function(_add_variant_swift_compile_flags
       "-target" "${SWIFT_SDK_${sdk}_ARCH_${arch}_TRIPLE}"
       "-resource-dir" "${SWIFTLIB_DIR}")
 
-  if("${CMAKE_SYSTEM_NAME}" STREQUAL "Darwin")
+  is_darwin_based_sdk("${sdk}" IS_DARWIN)
+  if(IS_DARWIN)
     list(APPEND result
         "-F" "${SWIFT_SDK_${sdk}_PATH}/../../../Developer/Library/Frameworks")
   endif()
@@ -225,13 +291,15 @@ function(_add_variant_swift_compile_flags
 endfunction()
 
 function(_add_variant_link_flags)
-  set(oneValueArgs SDK ARCH BUILD_TYPE ENABLE_ASSERTIONS ANALYZE_CODE_COVERAGE DEPLOYMENT_VERSION_IOS RESULT_VAR_NAME ENABLE_LTO)
+  set(oneValueArgs SDK ARCH BUILD_TYPE ENABLE_ASSERTIONS ANALYZE_CODE_COVERAGE
+  DEPLOYMENT_VERSION_OSX DEPLOYMENT_VERSION_IOS DEPLOYMENT_VERSION_TVOS DEPLOYMENT_VERSION_WATCHOS
+  RESULT_VAR_NAME ENABLE_LTO LTO_OBJECT_NAME)
   cmake_parse_arguments(LFLAGS
     ""
     "${oneValueArgs}"
     ""
     ${ARGN})
-  
+
   if("${LFLAGS_SDK}" STREQUAL "")
     message(FATAL_ERROR "Should specify an SDK")
   endif()
@@ -249,7 +317,10 @@ function(_add_variant_link_flags)
     ENABLE_ASSERTIONS "${LFLAGS_ENABLE_ASSERTIONS}"
     ENABLE_LTO "${LFLAGS_ENABLE_LTO}"
     ANALYZE_CODE_COVERAGE "${LFLAGS_ANALYZE_CODE_COVERAGE}"
+    DEPLOYMENT_VERSION_OSX "${LFLAGS_DEPLOYMENT_VERSION_OSX}"
     DEPLOYMENT_VERSION_IOS "${LFLAGS_DEPLOYMENT_VERSION_IOS}"
+    DEPLOYMENT_VERSION_TVOS "${LFLAGS_DEPLOYMENT_VERSION_TVOS}"
+    DEPLOYMENT_VERSION_WATCHOS "${LFLAGS_DEPLOYMENT_VERSION_WATCHOS}"
     RESULT_VAR_NAME result)
 
   if("${LFLAGS_SDK}" STREQUAL "LINUX")
@@ -258,14 +329,37 @@ function(_add_variant_link_flags)
     list(APPEND result "-lpthread")
   elseif("${LFLAGS_SDK}" STREQUAL "CYGWIN")
     # No extra libraries required.
+  elseif("${LFLAGS_SDK}" STREQUAL "WINDOWS")
+    # NOTE: we do not use "/MD" or "/MDd" and select the runtime via linker
+    # options.  This causes conflicts.
+    list(APPEND result "-nostdlib")
   elseif("${LFLAGS_SDK}" STREQUAL "ANDROID")
     list(APPEND result
         "-ldl"
-        "-L${SWIFT_ANDROID_NDK_PATH}/toolchains/arm-linux-androideabi-${SWIFT_ANDROID_NDK_GCC_VERSION}/prebuilt/linux-x86_64/lib/gcc/arm-linux-androideabi/${SWIFT_ANDROID_NDK_GCC_VERSION}"
-        "${SWIFT_ANDROID_NDK_PATH}/sources/cxx-stl/llvm-libc++/libs/armeabi-v7a/libc++_shared.so"
-        "-L${SWIFT_ANDROID_ICU_UC}" "-L${SWIFT_ANDROID_ICU_I18N}")
+        "-L${SWIFT_ANDROID_PREBUILT_PATH}/lib/gcc/arm-linux-androideabi/${SWIFT_ANDROID_NDK_GCC_VERSION}.x"
+        "${SWIFT_ANDROID_NDK_PATH}/sources/cxx-stl/llvm-libc++/libs/armeabi-v7a/libc++_shared.so")
   else()
     list(APPEND result "-lobjc")
+
+    # If lto is enabled, we need to add the object path flag so that the LTO code
+    # generator leaves the intermediate object file in a place where it will not
+    # be touched. The reason why this must be done is that on OS X, debug info is
+    # left in object files. So if the object file is removed when we go to
+    # generate a dsym, the debug info is gone.
+    if (LFLAGS_ENABLE_LTO)
+      precondition(LFLAGS_LTO_OBJECT_NAME
+        MESSAGE "Should specify a unique name for the lto object")
+      set(lto_object_dir ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_CFG_INTDIR})
+      set(lto_object ${lto_object_dir}/${LFLAGS_LTO_OBJECT_NAME}-lto.o)
+        list(APPEND result "-Wl,-object_path_lto,${lto_object}")
+      endif()
+  endif()
+
+  if(NOT "${SWIFT_${LFLAGS_SDK}_ICU_UC}" STREQUAL "")
+    list(APPEND result "-L${SWIFT_${sdk}_ICU_UC}")
+  endif()
+  if(NOT "${SWIFT_${LFLAGS_SDK}_ICU_I18N}" STREQUAL "")
+    list(APPEND result "-L${SWIFT_${sdk}_ICU_I18N}")
   endif()
 
   set("${LFLAGS_RESULT_VAR_NAME}" "${result}" PARENT_SCOPE)
@@ -308,21 +402,27 @@ endfunction()
 #
 # Usage:
 #   _add_swift_lipo_target(
+#     sdk                 # The name of the SDK the target was created for.
+#                         # Examples include "OSX", "IOS", "ANDROID", etc.
 #     target              # The name of the target to create
 #     output              # The file to be created by this target
 #     source_targets...   # The source targets whose outputs will be
 #                         # lipo'd into the output.
 #   )
-function(_add_swift_lipo_target target output)
-  if("${target}" STREQUAL "")
-    message(FATAL_ERROR "target is required")
-  endif()
+function(_add_swift_lipo_target)
+  cmake_parse_arguments(
+    LIPO                # prefix
+    "CODESIGN"          # options
+    "SDK;TARGET;OUTPUT" # single-value args
+    ""                  # multi-value args
+    ${ARGN})
 
-  if("${output}" STREQUAL "")
-    message(FATAL_ERROR "output is required")
-  endif()
+  precondition(LIPO_SDK MESSAGE "sdk is required")
+  precondition(LIPO_TARGET MESSAGE "target is required")
+  precondition(LIPO_OUTPUT MESSAGE "output is required")
+  precondition(LIPO_UNPARSED_ARGUMENTS MESSAGE "one or more inputs are required")
 
-  set(source_targets ${ARGN})
+  set(source_targets ${LIPO_UNPARSED_ARGUMENTS})
 
   # Gather the source binaries.
   set(source_binaries)
@@ -337,19 +437,24 @@ function(_add_swift_lipo_target target output)
     endif()
   endforeach()
 
-  if("${CMAKE_SYSTEM_NAME}" STREQUAL "Darwin")
+  is_darwin_based_sdk("${LIPO_SDK}" IS_DARWIN)
+  if(IS_DARWIN)
+    if(LIPO_CODESIGN)
+      set(codesign_command COMMAND "codesign" "-f" "-s" "-" "${LIPO_OUTPUT}")
+    endif()
     # Use lipo to create the final binary.
     add_custom_command_target(unused_var
-        COMMAND "${LIPO}" "-create" "-output" "${output}" ${source_binaries}
-        CUSTOM_TARGET_NAME "${target}"
-        OUTPUT "${output}"
+        COMMAND "${LIPO}" "-create" "-output" "${LIPO_OUTPUT}" ${source_binaries}
+        ${codesign_command}
+        CUSTOM_TARGET_NAME "${LIPO_TARGET}"
+        OUTPUT "${LIPO_OUTPUT}"
         DEPENDS ${source_targets})
   else()
     # We don't know how to create fat binaries for other platforms.
     add_custom_command_target(unused_var
-        COMMAND "${CMAKE_COMMAND}" "-E" "copy" "${source_binaries}" "${output}"
-        CUSTOM_TARGET_NAME "${target}"
-        OUTPUT "${output}"
+        COMMAND "${CMAKE_COMMAND}" "-E" "copy" "${source_binaries}" "${LIPO_OUTPUT}"
+        CUSTOM_TARGET_NAME "${LIPO_TARGET}"
+        OUTPUT "${LIPO_OUTPUT}"
         DEPENDS ${source_targets})
   endif()
 endfunction()
@@ -360,14 +465,16 @@ endfunction()
 #   _add_swift_library_single(
 #     target
 #     name
+#     [MODULE_TARGET]
 #     [SHARED]
+#     [STATIC]
 #     [SDK sdk]
 #     [ARCHITECTURE architecture]
 #     [DEPENDS dep1 ...]
 #     [LINK_LIBRARIES dep1 ...]
 #     [FRAMEWORK_DEPENDS dep1 ...]
 #     [FRAMEWORK_DEPENDS_WEAK dep1 ...]
-#     [COMPONENT_DEPENDS comp1 ...]
+#     [LLVM_COMPONENT_DEPENDS comp1 ...]
 #     [C_COMPILE_FLAGS flag1...]
 #     [SWIFT_COMPILE_FLAGS flag1...]
 #     [LINK_FLAGS flag1...]
@@ -387,8 +494,14 @@ endfunction()
 # name
 #   Name of the library (e.g., swiftParse).
 #
+# MODULE_TARGET
+#   Name of the module target (e.g., swiftParse-swiftmodule-IOS-armv7).
+#
 # SHARED
 #   Build a shared library.
+#
+# STATIC
+#   Build a static library.
 #
 # SDK sdk
 #   SDK to build for.
@@ -408,7 +521,7 @@ endfunction()
 # FRAMEWORK_DEPENDS_WEAK
 #   System frameworks this library depends on that should be weakly-linked.
 #
-# COMPONENT_DEPENDS
+# LLVM_COMPONENT_DEPENDS
 #   LLVM components this library depends on.
 #
 # C_COMPILE_FLAGS
@@ -448,13 +561,13 @@ endfunction()
 #   Sources to add into this library
 function(_add_swift_library_single target name)
   set(SWIFTLIB_SINGLE_options
-      SHARED OBJECT_LIBRARY IS_STDLIB IS_STDLIB_CORE IS_SDK_OVERLAY
+      SHARED STATIC OBJECT_LIBRARY IS_STDLIB IS_STDLIB_CORE IS_SDK_OVERLAY
       TARGET_LIBRARY FORCE_BUILD_FOR_HOST_SDK
       API_NOTES_NON_OVERLAY DONT_EMBED_BITCODE)
   cmake_parse_arguments(SWIFTLIB_SINGLE
     "${SWIFTLIB_SINGLE_options}"
-    "SDK;ARCHITECTURE;INSTALL_IN_COMPONENT;DEPLOYMENT_VERSION_IOS"
-    "DEPENDS;LINK_LIBRARIES;FRAMEWORK_DEPENDS;FRAMEWORK_DEPENDS_WEAK;COMPONENT_DEPENDS;C_COMPILE_FLAGS;SWIFT_COMPILE_FLAGS;LINK_FLAGS;PRIVATE_LINK_LIBRARIES;INTERFACE_LINK_LIBRARIES;INCORPORATE_OBJECT_LIBRARIES;FILE_DEPENDS"
+    "MODULE_TARGET;SDK;ARCHITECTURE;INSTALL_IN_COMPONENT;DEPLOYMENT_VERSION_OSX;DEPLOYMENT_VERSION_IOS;DEPLOYMENT_VERSION_TVOS;DEPLOYMENT_VERSION_WATCHOS"
+    "DEPENDS;LINK_LIBRARIES;FRAMEWORK_DEPENDS;FRAMEWORK_DEPENDS_WEAK;LLVM_COMPONENT_DEPENDS;C_COMPILE_FLAGS;SWIFT_COMPILE_FLAGS;LINK_FLAGS;PRIVATE_LINK_LIBRARIES;INTERFACE_LINK_LIBRARIES;INCORPORATE_OBJECT_LIBRARIES;INCORPORATE_OBJECT_LIBRARIES_SHARED_ONLY;FILE_DEPENDS"
     ${ARGN})
 
   set(SWIFTLIB_SINGLE_SOURCES ${SWIFTLIB_SINGLE_UNPARSED_ARGUMENTS})
@@ -473,7 +586,14 @@ function(_add_swift_library_single target name)
   if("${SWIFTLIB_SINGLE_INSTALL_IN_COMPONENT}" STREQUAL "")
     message(FATAL_ERROR "INSTALL_IN_COMPONENT is required")
   endif()
-  
+
+  if(NOT SWIFTLIB_SINGLE_SHARED AND
+     NOT SWIFTLIB_SINGLE_STATIC AND
+     NOT SWIFTLIB_SINGLE_OBJECT_LIBRARY)
+    message(FATAL_ERROR
+        "Either SHARED, STATIC, or OBJECT_LIBRARY must be specified")
+  endif()
+
   # Determine the subdirectory where this library will be installed.
   set(SWIFTLIB_SINGLE_SUBDIR
       "${SWIFT_SDK_${SWIFTLIB_SINGLE_SDK}_LIB_SUBDIR}/${SWIFTLIB_SINGLE_ARCHITECTURE}")
@@ -488,7 +608,8 @@ function(_add_swift_library_single target name)
   endif()
 
   if (SWIFT_COMPILER_VERSION)
-    if ("${CMAKE_SYSTEM_NAME}" STREQUAL "Darwin")
+    is_darwin_based_sdk("${SWIFTLIB_SINGLE_SDK}" IS_DARWIN)
+    if(IS_DARWIN)
       list(APPEND SWIFTLIB_SINGLE_LINK_FLAGS "-Xlinker" "-current_version" "-Xlinker" "${SWIFT_COMPILER_VERSION}" "-Xlinker" "-compatibility_version" "-Xlinker" "1")
     endif()
   endif()
@@ -516,10 +637,15 @@ function(_add_swift_library_single target name)
     set(libkind MODULE)
   elseif(SWIFTLIB_SINGLE_OBJECT_LIBRARY)
     set(libkind OBJECT)
+  # If both SHARED and STATIC are specified, we add the SHARED library first.
+  # The STATIC library is handled further below.
   elseif(SWIFTLIB_SINGLE_SHARED)
     set(libkind SHARED)
+  elseif(SWIFTLIB_SINGLE_STATIC)
+    set(libkind STATIC)
   else()
-    set(libkind)
+    message(FATAL_ERROR
+        "Either SHARED, STATIC, or OBJECT_LIBRARY must be specified")
   endif()
 
   handle_gyb_sources(
@@ -544,42 +670,54 @@ function(_add_swift_library_single target name)
   endif()
 
   # Remove the "swift" prefix from the name to determine the module name.
-  string(REPLACE swift "" module_name "${name}")
-  list(FIND SWIFT_API_NOTES_INPUTS "${module_name}" overlay_index)
-  if(NOT ${overlay_index} EQUAL -1)
+  if(SWIFTLIB_IS_STDLIB_CORE)
+    set(module_name "Swift")
+  else()
+    string(REPLACE swift "" module_name "${name}")
+  endif()
+  if("${module_name}" IN_LIST SWIFT_API_NOTES_INPUTS)
     set(SWIFTLIB_SINGLE_API_NOTES "${module_name}")
   endif()
 
-  # On platforms that use ELF binaries (for now that is Linux and FreeBSD)
-  # we add markers for metadata sections in the shared libraries using 
-  # these object files.  This wouldn't be necessary if the link was done by
-  # the swift binary: rdar://problem/19007002
-  if("${CMAKE_SYSTEM_NAME}" STREQUAL "Linux" OR
-     "${CMAKE_SYSTEM_NAME}" STREQUAL "FreeBSD")
-
+  # On platforms that use ELF binaries we add markers for metadata sections in
+  # the shared libraries using these object files.  This wouldn't be necessary
+  # if the link was done by the swift binary: rdar://problem/19007002
+  if("${SWIFT_SDK_${SWIFTLIB_SINGLE_SDK}_OBJECT_FORMAT}" STREQUAL "ELF")
     if("${libkind}" STREQUAL "SHARED")
       set(arch_subdir "${SWIFTLIB_DIR}/${SWIFTLIB_SINGLE_SUBDIR}")
 
       set(SWIFT_SECTIONS_OBJECT_BEGIN "${arch_subdir}/swift_begin.o")
       set(SWIFT_SECTIONS_OBJECT_END   "${arch_subdir}/swift_end.o")
     endif()
+  endif()
 
+  if("${SWIFTLIB_SINGLE_SDK}" STREQUAL "WINDOWS")
+    list(APPEND SWIFTLIB_SINGLE_SWIFT_COMPILE_FLAGS -Xfrontend;-autolink-library;-Xfrontend;oldnames)
+    # TODO(compnerd) handle /MT and /MTd
+    if("${CMAKE_BUILD_TYPE}" STREQUAL "RELEASE")
+      list(APPEND SWIFTLIB_SINGLE_SWIFT_COMPILE_FLAGS -Xfrontend;-autolink-library;-Xfrontend;msvcrt)
+    else()
+      list(APPEND SWIFTLIB_SINGLE_SWIFT_COMPILE_FLAGS -Xfrontend;-autolink-library;-Xfrontend;msvcrtd)
+    endif()
   endif()
 
   # FIXME: don't actually depend on the libraries in SWIFTLIB_SINGLE_LINK_LIBRARIES,
   # just any swiftmodule files that are associated with them.
   handle_swift_sources(
       swift_object_dependency_target
+      swift_module_dependency_target
       SWIFTLIB_SINGLE_SOURCES
       SWIFTLIB_SINGLE_EXTERNAL_SOURCES ${name}
       DEPENDS
         ${gyb_dependency_targets}
+        ${SWIFTLIB_SINGLE_DEPENDS}
         ${SWIFTLIB_SINGLE_FILE_DEPENDS}
         ${SWIFTLIB_SINGLE_LINK_LIBRARIES}
         ${SWIFTLIB_SINGLE_INTERFACE_LINK_LIBRARIES}
       SDK ${SWIFTLIB_SINGLE_SDK}
       ARCHITECTURE ${SWIFTLIB_SINGLE_ARCHITECTURE}
       API_NOTES ${SWIFTLIB_SINGLE_API_NOTES}
+      MODULE_NAME ${module_name}
       COMPILE_FLAGS ${SWIFTLIB_SINGLE_SWIFT_COMPILE_FLAGS}
       ${SWIFTLIB_SINGLE_IS_STDLIB_keyword}
       ${SWIFTLIB_SINGLE_IS_STDLIB_CORE_keyword}
@@ -587,10 +725,23 @@ function(_add_swift_library_single target name)
       INSTALL_IN_COMPONENT "${SWIFTLIB_INSTALL_IN_COMPONENT}")
   add_swift_source_group("${SWIFTLIB_SINGLE_EXTERNAL_SOURCES}")
 
+  # If there were any swift sources, then a .swiftmodule may have been created.
+  # If that is the case, then add a target which is an alias of the module files.
+  if(NOT "${SWIFTLIB_SINGLE_MODULE_TARGET}" STREQUAL "" AND NOT "${swift_module_dependency_target}" STREQUAL "")
+    add_custom_target("${SWIFTLIB_SINGLE_MODULE_TARGET}"
+                      DEPENDS ${swift_module_dependency_target})
+  endif()
+
   set(VARIANT_SUFFIX "-${SWIFT_SDK_${SWIFTLIB_SINGLE_SDK}_LIB_SUBDIR}-${SWIFTLIB_SINGLE_ARCHITECTURE}")
   set(SWIFTLIB_INCORPORATED_OBJECT_LIBRARIES_EXPRESSIONS)
   foreach(object_library ${SWIFTLIB_SINGLE_INCORPORATE_OBJECT_LIBRARIES})
     list(APPEND SWIFTLIB_INCORPORATED_OBJECT_LIBRARIES_EXPRESSIONS
+        $<TARGET_OBJECTS:${object_library}${VARIANT_SUFFIX}>)
+  endforeach()
+
+  set(SWIFTLIB_INCORPORATED_OBJECT_LIBRARIES_EXPRESSIONS_SHARED_ONLY)
+  foreach(object_library ${SWIFTLIB_SINGLE_INCORPORATE_OBJECT_LIBRARIES_SHARED_ONLY})
+    list(APPEND SWIFTLIB_INCORPORATED_OBJECT_LIBRARIES_EXPRESSIONS_SHARED_ONLY
         $<TARGET_OBJECTS:${object_library}${VARIANT_SUFFIX}>)
   endforeach()
 
@@ -602,18 +753,51 @@ function(_add_swift_library_single target name)
         ${SWIFT_SOURCE_DIR}/cmake/dummy.cpp)
   endif()
 
+  set(INCORPORATED_OBJECT_LIBRARIES_EXPRESSIONS ${SWIFTLIB_INCORPORATED_OBJECT_LIBRARIES_EXPRESSIONS})
+  if(${libkind} STREQUAL "SHARED")
+    list(APPEND INCORPORATED_OBJECT_LIBRARIES_EXPRESSIONS
+         ${SWIFTLIB_INCORPORATED_OBJECT_LIBRARIES_EXPRESSIONS_SHARED_ONLY})
+  endif()
+
   add_library("${target}" ${libkind}
       ${SWIFT_SECTIONS_OBJECT_BEGIN}
       ${SWIFTLIB_SINGLE_SOURCES}
       ${SWIFTLIB_SINGLE_EXTERNAL_SOURCES}
-      ${SWIFTLIB_INCORPORATED_OBJECT_LIBRARIES_EXPRESSIONS}
+      ${INCORPORATED_OBJECT_LIBRARIES_EXPRESSIONS}
       ${SWIFTLIB_SINGLE_XCODE_WORKAROUND_SOURCES}
       ${SWIFT_SECTIONS_OBJECT_END})
+  _set_target_prefix_and_suffix("${target}" "${libkind}" "${SWIFTLIB_SINGLE_SDK}")
+
+  if(SWIFTLIB_SINGLE_TARGET_LIBRARY)
+    if(NOT "${SWIFT_${SWIFTLIB_SINGLE_SDK}_ICU_UC_INCLUDE}" STREQUAL "")
+      set_property(TARGET "${target}" APPEND_STRING
+          PROPERTY INCLUDE_DIRECTORIES "${SWIFT_${SWIFTLIB_SINGLE_SDK}_ICU_UC_INCLUDE}")
+    endif()
+    if(NOT "${SWIFT_${SWIFTLIB_SINGLE_SDK}_ICU_I18N_INCLUDE}" STREQUAL "")
+      set_property(TARGET "${target}" APPEND_STRING
+          PROPERTY INCLUDE_DIRECTORIES "${SWIFT_${SWIFTLIB_SINGLE_SDK}_ICU_I18N_INCLUDE}")
+    endif()
+  endif()
+
+  if("${SWIFTLIB_SINGLE_SDK}" STREQUAL "WINDOWS")
+    if("${libkind}" STREQUAL "SHARED")
+      # Each dll has an associated .lib (import library); since we may be
+      # building on a non-DLL platform (not windows), create an imported target
+      # for the library which created implicitly by the dll.
+      add_custom_command_target(${target}_IMPORT_LIBRARY
+                                OUTPUT "${SWIFTLIB_DIR}/${SWIFTLIB_SINGLE_SUBDIR}/${name}.lib"
+                                DEPENDS "${target}")
+      add_library(${target}_IMPLIB SHARED IMPORTED GLOBAL)
+      set_property(TARGET "${target}_IMPLIB" PROPERTY
+          IMPORTED_LOCATION "${SWIFTLIB_DIR}/${SWIFTLIB_SINGLE_SUBDIR}/${name}.lib")
+      add_dependencies(${target}_IMPLIB ${${target}_IMPORT_LIBRARY})
+    endif()
+    set_property(TARGET "${target}" PROPERTY NO_SONAME ON)
+  endif()
 
   # The section metadata objects are generated sources, and we need to tell CMake
   # not to expect to find them prior to their generation.
-  if("${CMAKE_SYSTEM_NAME}" STREQUAL "Linux" OR
-     "${CMAKE_SYSTEM_NAME}" STREQUAL "FreeBSD")
+  if("${SWIFT_SDK_${SWIFTLIB_SINGLE_SDK}_OBJECT_FORMAT}" STREQUAL "ELF")
     if("${libkind}" STREQUAL "SHARED")
       set_source_files_properties(${SWIFT_SECTIONS_OBJECT_BEGIN} PROPERTIES GENERATED 1)
       set_source_files_properties(${SWIFT_SECTIONS_OBJECT_END} PROPERTIES GENERATED 1)
@@ -643,14 +827,15 @@ function(_add_swift_library_single target name)
 
     foreach(config ${CMAKE_CONFIGURATION_TYPES})
       string(TOUPPER ${config} config_upper)
-      apply_xcode_substitutions("${config}" "${SWIFTLIB_DIR}" config_lib_dir)
+      escape_path_for_xcode("${config}" "${SWIFTLIB_DIR}" config_lib_dir)
       set_target_properties(${target} PROPERTIES
         LIBRARY_OUTPUT_DIRECTORY_${config_upper} ${config_lib_dir}/${SWIFTLIB_SINGLE_SUBDIR}
         ARCHIVE_OUTPUT_DIRECTORY_${config_upper} ${config_lib_dir}/${SWIFTLIB_SINGLE_SUBDIR})
     endforeach()
   endif()
 
-  if("${CMAKE_SYSTEM_NAME}" STREQUAL "Darwin")
+  is_darwin_based_sdk("${SWIFTLIB_SINGLE_SDK}" IS_DARWIN)
+  if(IS_DARWIN)
     set(install_name_dir "@rpath")
 
     if(SWIFTLIB_SINGLE_IS_STDLIB)
@@ -663,11 +848,11 @@ function(_add_swift_library_single target name)
     set_target_properties("${target}"
       PROPERTIES
       INSTALL_NAME_DIR "${install_name_dir}")
-  elseif("${CMAKE_SYSTEM_NAME}" STREQUAL "Linux" AND NOT "${SWIFTLIB_SINGLE_SDK}" STREQUAL "ANDROID")
+  elseif("${SWIFTLIB_SINGLE_SDK}" STREQUAL "LINUX" AND NOT "${SWIFTLIB_SINGLE_SDK}" STREQUAL "ANDROID")
     set_target_properties("${target}"
       PROPERTIES
       INSTALL_RPATH "$ORIGIN:/usr/lib/swift/linux")
-  elseif("${CMAKE_SYSTEM_NAME}" STREQUAL "Cygwin")
+  elseif("${SWIFTLIB_SINGLE_SDK}" STREQUAL "CYGWIN")
     set_target_properties("${target}"
       PROPERTIES
       INSTALL_RPATH "$ORIGIN:/usr/lib/swift/windows")
@@ -679,9 +864,8 @@ function(_add_swift_library_single target name)
   # Configure the static library target.
   # Set compile and link flags for the non-static target.
   # Do these LAST.
-
   set(target_static)
-  if(SWIFTLIB_SINGLE_IS_STDLIB AND SWIFT_BUILD_STATIC_STDLIB)
+  if(SWIFTLIB_SINGLE_IS_STDLIB AND SWIFTLIB_SINGLE_STATIC)
     set(target_static "${target}-static")
 
     # We have already compiled Swift sources.  Link everything into a static
@@ -697,7 +881,7 @@ function(_add_swift_library_single target name)
 
     foreach(config ${CMAKE_CONFIGURATION_TYPES})
       string(TOUPPER ${config} config_upper)
-      apply_xcode_substitutions(
+      escape_path_for_xcode(
           "${config}" "${SWIFTSTATICLIB_DIR}" config_lib_dir)
       set_target_properties(${target_static} PROPERTIES
         LIBRARY_OUTPUT_DIRECTORY_${config_upper} ${config_lib_dir}/${SWIFTLIB_SINGLE_SUBDIR}
@@ -734,6 +918,7 @@ function(_add_swift_library_single target name)
         ${SWIFTLIB_SINGLE_DEPENDS}
         ${gyb_dependency_targets}
         "${swift_object_dependency_target}"
+        "${swift_module_dependency_target}"
         ${LLVM_COMMON_DEPENDS})
 
   # HACK: On some systems or build directory setups, CMake will not find static
@@ -795,7 +980,7 @@ function(_add_swift_library_single target name)
 
   if(NOT SWIFTLIB_SINGLE_TARGET_LIBRARY)
     # Call llvm_config() only for libraries that are part of the compiler.
-    swift_common_llvm_config("${target}" ${SWIFTLIB_SINGLE_COMPONENT_DEPENDS})
+    swift_common_llvm_config("${target}" ${SWIFTLIB_SINGLE_LLVM_COMPONENT_DEPENDS})
   endif()
 
   # Collect compile and link flags for the static and non-static targets.
@@ -824,7 +1009,10 @@ function(_add_swift_library_single target name)
     ENABLE_ASSERTIONS "${enable_assertions}"
     ANALYZE_CODE_COVERAGE "${analyze_code_coverage}"
     ENABLE_LTO "${lto_type}"
+    DEPLOYMENT_VERSION_OSX "${SWIFTLIB_DEPLOYMENT_VERSION_OSX}"
     DEPLOYMENT_VERSION_IOS "${SWIFTLIB_DEPLOYMENT_VERSION_IOS}"
+    DEPLOYMENT_VERSION_TVOS "${SWIFTLIB_DEPLOYMENT_VERSION_TVOS}"
+    DEPLOYMENT_VERSION_WATCHOS "${SWIFTLIB_DEPLOYMENT_VERSION_WATCHOS}"
     RESULT_VAR_NAME c_compile_flags
     )
   _add_variant_link_flags(
@@ -834,17 +1022,27 @@ function(_add_swift_library_single target name)
     ENABLE_ASSERTIONS "${enable_assertions}"
     ANALYZE_CODE_COVERAGE "${analyze_code_coverage}"
     ENABLE_LTO "${lto_type}"
+    LTO_OBJECT_NAME "${target}-${SWIFTLIB_SINGLE_SDK}-${SWIFTLIB_SINGLE_ARCHITECTURE}"
+    DEPLOYMENT_VERSION_OSX "${SWIFTLIB_DEPLOYMENT_VERSION_OSX}"
     DEPLOYMENT_VERSION_IOS "${SWIFTLIB_DEPLOYMENT_VERSION_IOS}"
+    DEPLOYMENT_VERSION_TVOS "${SWIFTLIB_DEPLOYMENT_VERSION_TVOS}"
+    DEPLOYMENT_VERSION_WATCHOS "${SWIFTLIB_DEPLOYMENT_VERSION_WATCHOS}"
     RESULT_VAR_NAME link_flags
       )
 
-  if(SWIFT_ENABLE_GOLD_LINKER)
+  if(SWIFT_ENABLE_GOLD_LINKER AND
+     "${SWIFT_SDK_${SWIFTLIB_SINGLE_SDK}_OBJECT_FORMAT}" STREQUAL "ELF")
     list(APPEND link_flags "-fuse-ld=gold")
+  endif()
+  if(SWIFT_ENABLE_LLD_LINKER OR
+     ("${SWIFTLIB_SINGLE_SDK}" STREQUAL "WINDOWS" AND
+      NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "WINDOWS"))
+    list(APPEND link_flags "-fuse-ld=lld")
   endif()
 
   # Configure plist creation for OS X.
   set(PLIST_INFO_PLIST "Info.plist" CACHE STRING "Plist name")
-  if(APPLE AND SWIFTLIB_SINGLE_IS_STDLIB)
+  if("${SWIFTLIB_SINGLE_SDK}" IN_LIST SWIFT_APPLE_PLATFORMS AND SWIFTLIB_SINGLE_IS_STDLIB)
     set(PLIST_INFO_NAME ${name})
     set(PLIST_INFO_UTI "com.apple.dt.runtime.${name}")
     set(PLIST_INFO_VERSION "${SWIFT_VERSION}")
@@ -883,6 +1081,34 @@ function(_add_swift_library_single target name)
       COMPILE_FLAGS " ${c_compile_flags}")
   set_property(TARGET "${target}" APPEND_STRING PROPERTY
     LINK_FLAGS " ${link_flags} -L${SWIFTLIB_DIR}/${SWIFTLIB_SINGLE_SUBDIR} -L${SWIFT_NATIVE_SWIFT_TOOLS_PATH}/../lib/swift/${SWIFTLIB_SINGLE_SUBDIR} -L${SWIFT_NATIVE_SWIFT_TOOLS_PATH}/../lib/swift/${SWIFT_SDK_${SWIFTLIB_SINGLE_SDK}_LIB_SUBDIR}")
+
+  # Adjust the linked libraries for windows targets.  On Windows, the link is
+  # performed against the import library, and the runtime uses the dll.  Not
+  # doing so will result in incorrect symbol resolution and linkage.  We created
+  # import library targets when the library was added.  Use that to adjust the
+  # link libraries.
+  if("${SWIFTLIB_SINGLE_SDK}" STREQUAL "WINDOWS")
+    foreach(library_list LINK_LIBRARIES INTERFACE_LINK_LIBRARIES PRIVATE_LINK_LIBRARIES)
+      set(import_libraries)
+      foreach(library ${SWIFTLIB_SINGLE_${library_list}})
+        # Ensure that the library is a target.  If an absolute path was given,
+        # then we do not have an import library associated with it.  This occurs
+        # primarily with ICU (which will be an import library).  Import
+        # libraries are only associated with shared libraries, so add an
+        # additional check for that as well.
+        set(import_library ${library})
+        if(TARGET ${library})
+          get_target_property(type ${library} TYPE)
+          if(${type} STREQUAL "SHARED_LIBRARY")
+            set(import_library ${library}_IMPLIB)
+          endif()
+        endif()
+        list(APPEND import_libraries ${import_library})
+      endforeach()
+      set(SWIFTLIB_SINGLE_${library_list} ${import_libraries})
+    endforeach()
+  endif()
+
   if("${libkind}" STREQUAL "OBJECT")
     _require_empty_list(
         "${SWIFTLIB_SINGLE_PRIVATE_LINK_LIBRARIES}"
@@ -920,13 +1146,14 @@ endfunction()
 # Usage:
 #   add_swift_library(name
 #     [SHARED]
+#     [STATIC]
 #     [DEPENDS dep1 ...]
 #     [LINK_LIBRARIES dep1 ...]
 #     [INTERFACE_LINK_LIBRARIES dep1 ...]
 #     [SWIFT_MODULE_DEPENDS dep1 ...]
 #     [FRAMEWORK_DEPENDS dep1 ...]
 #     [FRAMEWORK_DEPENDS_WEAK dep1 ...]
-#     [COMPONENT_DEPENDS comp1 ...]
+#     [LLVM_COMPONENT_DEPENDS comp1 ...]
 #     [FILE_DEPENDS target1 ...]
 #     [TARGET_SDKS sdk1...]
 #     [C_COMPILE_FLAGS flag1...]
@@ -940,7 +1167,10 @@ endfunction()
 #     [TARGET_LIBRARY]
 #     [FORCE_BUILD_FOR_HOST_SDK]
 #     INSTALL_IN_COMPONENT comp
+#     DEPLOYMENT_VERSION_OSX version
 #     DEPLOYMENT_VERSION_IOS version
+#     DEPLOYMENT_VERSION_TVOS version
+#     DEPLOYMENT_VERSION_WATCHOS version
 #     source1 [source2 source3 ...])
 #
 # name
@@ -948,6 +1178,9 @@ endfunction()
 #
 # SHARED
 #   Build a shared library.
+#
+# STATIC
+#   Build a static library.
 #
 # DEPENDS
 #   Targets that this library depends on.
@@ -970,13 +1203,19 @@ endfunction()
 # SWIFT_MODULE_DEPENDS_WATCHOS
 #   Swift modules this library depends on when built for watchOS.
 #
+# SWIFT_MODULE_DEPENDS_FREEBSD
+#   Swift modules this library depends on when built for FreeBSD.
+#
+# SWIFT_MODULE_DEPENDS_LINUX
+#   Swift modules this library depends on when built for Linux.
+#
 # FRAMEWORK_DEPENDS
 #   System frameworks this library depends on.
 #
 # FRAMEWORK_DEPENDS_WEAK
 #   System frameworks this library depends on that should be weak-linked
 #
-# COMPONENT_DEPENDS
+# LLVM_COMPONENT_DEPENDS
 #   LLVM components this library depends on.
 #
 # FILE_DEPENDS
@@ -1018,8 +1257,17 @@ endfunction()
 # INSTALL_IN_COMPONENT comp
 #   The Swift installation component that this library belongs to.
 #
+# DEPLOYMENT_VERSION_OSX
+#   The minimum deployment version to build for if this is an OSX library.
+#
 # DEPLOYMENT_VERSION_IOS
 #   The minimum deployment version to build for if this is an iOS library.
+#
+# DEPLOYMENT_VERSION_TVOS
+#   The minimum deployment version to build for if this is an TVOS library.
+#
+# DEPLOYMENT_VERSION_WATCHOS
+#   The minimum deployment version to build for if this is an WATCHOS library.
 #
 # FORCE_BUILD_FOR_HOST_SDK
 #   Regardless of the defaults, also build this library for the host SDK.
@@ -1028,13 +1276,13 @@ endfunction()
 #   Sources to add into this library.
 function(add_swift_library name)
   set(SWIFTLIB_options
-      SHARED OBJECT_LIBRARY IS_STDLIB IS_STDLIB_CORE IS_SDK_OVERLAY
+      SHARED STATIC OBJECT_LIBRARY IS_STDLIB IS_STDLIB_CORE IS_SDK_OVERLAY
       TARGET_LIBRARY FORCE_BUILD_FOR_HOST_SDK
       API_NOTES_NON_OVERLAY DONT_EMBED_BITCODE HAS_SWIFT_CONTENT)
   cmake_parse_arguments(SWIFTLIB
     "${SWIFTLIB_options}"
-    "INSTALL_IN_COMPONENT;DEPLOYMENT_VERSION_IOS"
-    "DEPENDS;LINK_LIBRARIES;SWIFT_MODULE_DEPENDS;SWIFT_MODULE_DEPENDS_OSX;SWIFT_MODULE_DEPENDS_IOS;SWIFT_MODULE_DEPENDS_TVOS;SWIFT_MODULE_DEPENDS_WATCHOS;FRAMEWORK_DEPENDS;FRAMEWORK_DEPENDS_WEAK;FRAMEWORK_DEPENDS_OSX;FRAMEWORK_DEPENDS_IOS_TVOS;COMPONENT_DEPENDS;FILE_DEPENDS;TARGET_SDKS;C_COMPILE_FLAGS;SWIFT_COMPILE_FLAGS;SWIFT_COMPILE_FLAGS_OSX;SWIFT_COMPILE_FLAGS_IOS;SWIFT_COMPILE_FLAGS_TVOS;SWIFT_COMPILE_FLAGS_WATCHOS;LINK_FLAGS;PRIVATE_LINK_LIBRARIES;INTERFACE_LINK_LIBRARIES;INCORPORATE_OBJECT_LIBRARIES"
+    "INSTALL_IN_COMPONENT;DEPLOYMENT_VERSION_OSX;DEPLOYMENT_VERSION_IOS;DEPLOYMENT_VERSION_TVOS;DEPLOYMENT_VERSION_WATCHOS"
+    "DEPENDS;LINK_LIBRARIES;SWIFT_MODULE_DEPENDS;SWIFT_MODULE_DEPENDS_OSX;SWIFT_MODULE_DEPENDS_IOS;SWIFT_MODULE_DEPENDS_TVOS;SWIFT_MODULE_DEPENDS_WATCHOS;SWIFT_MODULE_DEPENDS_FREEBSD;SWIFT_MODULE_DEPENDS_LINUX;FRAMEWORK_DEPENDS;FRAMEWORK_DEPENDS_WEAK;FRAMEWORK_DEPENDS_OSX;FRAMEWORK_DEPENDS_IOS_TVOS;LLVM_COMPONENT_DEPENDS;FILE_DEPENDS;TARGET_SDKS;C_COMPILE_FLAGS;SWIFT_COMPILE_FLAGS;SWIFT_COMPILE_FLAGS_OSX;SWIFT_COMPILE_FLAGS_IOS;SWIFT_COMPILE_FLAGS_TVOS;SWIFT_COMPILE_FLAGS_WATCHOS;LINK_FLAGS;PRIVATE_LINK_LIBRARIES;INTERFACE_LINK_LIBRARIES;INCORPORATE_OBJECT_LIBRARIES;INCORPORATE_OBJECT_LIBRARIES_SHARED_ONLY"
     ${ARGN})
   set(SWIFTLIB_SOURCES ${SWIFTLIB_UNPARSED_ARGUMENTS})
 
@@ -1042,7 +1290,6 @@ function(add_swift_library name)
 
   if(SWIFTLIB_IS_SDK_OVERLAY)
     set(SWIFTLIB_HAS_SWIFT_CONTENT TRUE)
-    set(SWIFTLIB_SHARED TRUE)
     set(SWIFTLIB_IS_STDLIB TRUE)
     set(SWIFTLIB_TARGET_LIBRARY TRUE)
 
@@ -1064,6 +1311,8 @@ function(add_swift_library name)
   if("${SWIFTLIB_TARGET_SDKS}" STREQUAL "")
     set(SWIFTLIB_TARGET_SDKS ${SWIFT_SDKS})
   endif()
+  list_replace(SWIFTLIB_TARGET_SDKS ALL_POSIX_PLATFORMS "ALL_APPLE_PLATFORMS;ANDROID;CYGWIN;FREEBSD;LINUX")
+  list_replace(SWIFTLIB_TARGET_SDKS ALL_APPLE_PLATFORMS "${SWIFT_APPLE_PLATFORMS}")
 
   # All Swift code depends on the standard library, except for the standard
   # library itself.
@@ -1104,8 +1353,19 @@ function(add_swift_library name)
   if("${SWIFTLIB_INSTALL_IN_COMPONENT}" STREQUAL "")
     message(FATAL_ERROR "INSTALL_IN_COMPONENT is required")
   endif()
-  
+
+  if(NOT SWIFTLIB_SHARED AND
+     NOT SWIFTLIB_STATIC AND
+     NOT SWIFTLIB_OBJECT_LIBRARY)
+    message(FATAL_ERROR
+        "Either SHARED, STATIC, or OBJECT_LIBRARY must be specified")
+  endif()
+
   if(SWIFTLIB_TARGET_LIBRARY)
+    if(NOT SWIFT_BUILD_RUNTIME_WITH_HOST_COMPILER)
+      list(APPEND SWIFTLIB_DEPENDS clang)
+    endif()
+
     # If we are building this library for targets, loop through the various
     # SDKs building the variants of this library.
     list_intersect(
@@ -1123,6 +1383,8 @@ function(add_swift_library name)
         # Configure variables for this subdirectory.
         set(VARIANT_SUFFIX "-${SWIFT_SDK_${sdk}_LIB_SUBDIR}-${arch}")
         set(VARIANT_NAME "${name}${VARIANT_SUFFIX}")
+        set(MODULE_VARIANT_SUFFIX "-swiftmodule${VARIANT_SUFFIX}")
+        set(MODULE_VARIANT_NAME "${name}${MODULE_VARIANT_SUFFIX}")
 
         # Map dependencies over to the appropriate variants.
         set(swiftlib_link_libraries)
@@ -1147,12 +1409,38 @@ function(add_swift_library name)
         elseif("${sdk}" STREQUAL "WATCHOS" OR "${sdk}" STREQUAL "WATCHOS_SIMULATOR")
           list(APPEND swiftlib_module_depends_flattened
               ${SWIFTLIB_SWIFT_MODULE_DEPENDS_WATCHOS})
+        elseif("${sdk}" STREQUAL "FREEBSD")
+          list(APPEND swiftlib_module_depends_flattened
+               ${SWIFTLIB_SWIFT_MODULE_DEPENDS_FREEBSD})
+        elseif("${sdk}" STREQUAL "LINUX" OR "${sdk}" STREQUAL "ANDROID")
+          list(APPEND swiftlib_module_depends_flattened
+              ${SWIFTLIB_SWIFT_MODULE_DEPENDS_LINUX})
         endif()
 
+        # Swift compiles depend on swift modules, while links depend on
+        # linked libraries.  Find targets for both of these here.
         set(swiftlib_module_dependency_targets)
+        set(swiftlib_private_link_libraries_targets)
         foreach(mod ${swiftlib_module_depends_flattened})
           list(APPEND swiftlib_module_dependency_targets
+              "swift${mod}${MODULE_VARIANT_SUFFIX}")
+          list(APPEND swiftlib_private_link_libraries_targets
               "swift${mod}${VARIANT_SUFFIX}")
+        endforeach()
+
+        foreach(lib ${SWIFTLIB_PRIVATE_LINK_LIBRARIES})
+          if("${lib}" STREQUAL "ICU_UC")
+            list(APPEND swiftlib_private_link_libraries_targets
+                 "${SWIFT_${sdk}_ICU_UC}")
+          elseif("${lib}" STREQUAL "ICU_I18N")
+            list(APPEND swiftlib_private_link_libraries_targets
+                 "${SWIFT_${sdk}_ICU_I18N}")
+          elseif(TARGET "${lib}${VARIANT_SUFFIX}")
+            list(APPEND swiftlib_private_link_libraries_targets
+                "${lib}${VARIANT_SUFFIX}")
+          else()
+            list(APPEND swiftlib_private_link_libraries_targets "${lib}")
+          endif()
         endforeach()
 
         set(swiftlib_framework_depends_flattened ${SWIFTLIB_FRAMEWORK_DEPENDS})
@@ -1163,17 +1451,6 @@ function(add_swift_library name)
           list(APPEND swiftlib_framework_depends_flattened
               ${SWIFTLIB_FRAMEWORK_DEPENDS_IOS_TVOS})
         endif()
-
-        set(swiftlib_private_link_libraries_targets
-            ${swiftlib_module_dependency_targets})
-        foreach(lib ${SWIFTLIB_PRIVATE_LINK_LIBRARIES})
-          if(TARGET "${lib}${VARIANT_SUFFIX}")
-            list(APPEND swiftlib_private_link_libraries_targets
-                "${lib}${VARIANT_SUFFIX}")
-          else()
-            list(APPEND swiftlib_private_link_libraries_targets "${lib}")
-          endif()
-        endforeach()
 
         # Collect compiler flags
         set(swiftlib_swift_compile_flags_all ${SWIFTLIB_SWIFT_COMPILE_FLAGS})
@@ -1189,6 +1466,19 @@ function(add_swift_library name)
         elseif("${sdk}" STREQUAL "WATCHOS" OR "${sdk}" STREQUAL "WATCHOS_SIMULATOR")
           list(APPEND swiftlib_swift_compile_flags_all
               ${SWIFTLIB_SWIFT_COMPILE_FLAGS_WATCHOS})
+        elseif("${sdk}" STREQUAL "WINDOWS")
+          # FIXME(SR2005) static and shared are not mutually exclusive; however
+          # since we do a single build of the sources, this doesn't work for
+          # building both simultaneously.  Effectively, only shared builds are
+          # supported on windows currently.
+          if(SWIFTLIB_SHARED)
+            list(APPEND swiftlib_swift_compile_flags_all -D_USRDLL)
+            if(SWIFTLIB_IS_STDLIB_CORE)
+              list(APPEND swiftlib_swift_compile_flags_all -DswiftCore_EXPORTS)
+            endif()
+          elseif(SWIFTLIB_STATIC)
+            list(APPEND swiftlib_swift_compile_flags_all -D_LIB)
+          endif()
         endif()
 
         # Add this library variant.
@@ -1196,21 +1486,24 @@ function(add_swift_library name)
           ${VARIANT_NAME}
           ${name}
           ${SWIFTLIB_SHARED_keyword}
+          ${SWIFTLIB_STATIC_keyword}
           ${SWIFTLIB_OBJECT_LIBRARY_keyword}
           ${SWIFTLIB_SOURCES}
+          MODULE_TARGET ${MODULE_VARIANT_NAME}
           SDK ${sdk}
           ARCHITECTURE ${arch}
           DEPENDS ${SWIFTLIB_DEPENDS}
           LINK_LIBRARIES ${swiftlib_link_libraries}
           FRAMEWORK_DEPENDS ${swiftlib_framework_depends_flattened}
           FRAMEWORK_DEPENDS_WEAK ${SWIFTLIB_FRAMEWORK_DEPENDS_WEAK}
-          COMPONENT_DEPENDS ${SWIFTLIB_COMPONENT_DEPENDS}
+          LLVM_COMPONENT_DEPENDS ${SWIFTLIB_LLVM_COMPONENT_DEPENDS}
           FILE_DEPENDS ${SWIFTLIB_FILE_DEPENDS} ${swiftlib_module_dependency_targets}
           C_COMPILE_FLAGS ${SWIFTLIB_C_COMPILE_FLAGS}
           SWIFT_COMPILE_FLAGS ${swiftlib_swift_compile_flags_all}
           LINK_FLAGS ${SWIFTLIB_LINK_FLAGS}
           PRIVATE_LINK_LIBRARIES ${swiftlib_private_link_libraries_targets}
           INCORPORATE_OBJECT_LIBRARIES ${SWIFTLIB_INCORPORATE_OBJECT_LIBRARIES}
+          INCORPORATE_OBJECT_LIBRARIES_SHARED_ONLY ${SWIFTLIB_INCORPORATE_OBJECT_LIBRARIES_SHARED_ONLY}
           ${SWIFTLIB_DONT_EMBED_BITCODE_keyword}
           ${SWIFTLIB_API_NOTES_NON_OVERLAY_keyword}
           ${SWIFTLIB_IS_STDLIB_keyword}
@@ -1219,7 +1512,10 @@ function(add_swift_library name)
           ${SWIFTLIB_TARGET_LIBRARY_keyword}
           ${SWIFTLIB_FORCE_BUILD_FOR_HOST_SDK_keyword}
           INSTALL_IN_COMPONENT "${SWIFTLIB_INSTALL_IN_COMPONENT}"
+          DEPLOYMENT_VERSION_OSX "${SWIFTLIB_DEPLOYMENT_VERSION_OSX}"
           DEPLOYMENT_VERSION_IOS "${SWIFTLIB_DEPLOYMENT_VERSION_IOS}"
+          DEPLOYMENT_VERSION_TVOS "${SWIFTLIB_DEPLOYMENT_VERSION_TVOS}"
+          DEPLOYMENT_VERSION_WATCHOS "${SWIFTLIB_DEPLOYMENT_VERSION_WATCHOS}"
         )
 
         if(NOT SWIFTLIB_OBJECT_LIBRARY)
@@ -1231,7 +1527,7 @@ function(add_swift_library name)
             endif()
           endforeach()
 
-          if (SWIFT_BUILD_STATIC_STDLIB AND SWIFTLIB_IS_STDLIB)
+          if (SWIFTLIB_IS_STDLIB AND SWIFTLIB_STATIC)
             # Add dependencies on the (not-yet-created) custom lipo target.
             foreach(DEP ${SWIFTLIB_LINK_LIBRARIES})
               if (NOT "${DEP}" STREQUAL "icucore")
@@ -1249,18 +1545,32 @@ function(add_swift_library name)
       if(NOT SWIFTLIB_OBJECT_LIBRARY)
         # Determine the name of the universal library.
         if(SWIFTLIB_SHARED)
-          set(UNIVERSAL_LIBRARY_NAME
-            "${SWIFTLIB_DIR}/${SWIFT_SDK_${sdk}_LIB_SUBDIR}/${CMAKE_SHARED_LIBRARY_PREFIX}${name}${CMAKE_SHARED_LIBRARY_SUFFIX}")
+          if("${sdk}" STREQUAL "WINDOWS")
+            set(UNIVERSAL_LIBRARY_NAME
+              "${SWIFTLIB_DIR}/${SWIFT_SDK_${sdk}_LIB_SUBDIR}/${name}.dll")
+          else()
+            set(UNIVERSAL_LIBRARY_NAME
+              "${SWIFTLIB_DIR}/${SWIFT_SDK_${sdk}_LIB_SUBDIR}/${CMAKE_SHARED_LIBRARY_PREFIX}${name}${CMAKE_SHARED_LIBRARY_SUFFIX}")
+          endif()
         else()
-          set(UNIVERSAL_LIBRARY_NAME
-            "${SWIFTLIB_DIR}/${SWIFT_SDK_${sdk}_LIB_SUBDIR}/${CMAKE_STATIC_LIBRARY_PREFIX}${name}${CMAKE_STATIC_LIBRARY_SUFFIX}")
+          if("${sdk}" STREQUAL "WINDOWS")
+            set(UNIVERSAL_LIBRARY_NAME
+              "${SWIFTLIB_DIR}/${SWIFT_SDK_${sdk}_LIB_SUBDIR}/lib${name}.lib")
+          else()
+            set(UNIVERSAL_LIBRARY_NAME
+              "${SWIFTLIB_DIR}/${SWIFT_SDK_${sdk}_LIB_SUBDIR}/${CMAKE_STATIC_LIBRARY_PREFIX}${name}${CMAKE_STATIC_LIBRARY_SUFFIX}")
+          endif()
         endif()
 
-
         set(lipo_target "${name}-${SWIFT_SDK_${sdk}_LIB_SUBDIR}")
+        if("${CMAKE_SYSTEM_NAME}" STREQUAL "Darwin" AND SWIFTLIB_SHARED)
+          set(codesign_arg CODESIGN)
+        endif()
         _add_swift_lipo_target(
-            ${lipo_target}
-            "${UNIVERSAL_LIBRARY_NAME}"
+            SDK ${sdk}
+            TARGET ${lipo_target}
+            OUTPUT ${UNIVERSAL_LIBRARY_NAME}
+            ${codesign_arg}
             ${THIN_INPUT_TARGETS})
 
         # Cache universal libraries for dependency purposes
@@ -1300,7 +1610,7 @@ function(add_swift_library name)
         # If we built static variants of the library, create a lipo target for
         # them.
         set(lipo_target_static)
-        if (SWIFT_BUILD_STATIC_STDLIB AND SWIFTLIB_IS_STDLIB)
+        if (SWIFTLIB_IS_STDLIB AND SWIFTLIB_STATIC)
           set(THIN_INPUT_TARGETS_STATIC)
           foreach(TARGET ${THIN_INPUT_TARGETS})
             list(APPEND THIN_INPUT_TARGETS_STATIC "${TARGET}-static")
@@ -1311,8 +1621,9 @@ function(add_swift_library name)
           set(UNIVERSAL_LIBRARY_NAME
               "${SWIFTSTATICLIB_DIR}/${SWIFT_SDK_${sdk}_LIB_SUBDIR}/${CMAKE_STATIC_LIBRARY_PREFIX}${name}${CMAKE_STATIC_LIBRARY_SUFFIX}")
           _add_swift_lipo_target(
-              ${lipo_target_static}
-              "${UNIVERSAL_LIBRARY_NAME}"
+              SDK ${sdk}
+              TARGET ${lipo_target_static}
+              OUTPUT "${UNIVERSAL_LIBRARY_NAME}"
               ${THIN_INPUT_TARGETS_STATIC})
           swift_install_in_component("${SWIFTLIB_INSTALL_IN_COMPONENT}"
               FILES "${UNIVERSAL_LIBRARY_NAME}"
@@ -1332,7 +1643,8 @@ function(add_swift_library name)
               add_dependencies("swift-stdlib${VARIANT_SUFFIX}"
                   ${lipo_target}
                   ${lipo_target_static})
-              if(NOT "${name}" STREQUAL "swiftStdlibCollectionUnittest")
+              if((NOT "${name}" STREQUAL "swiftStdlibCollectionUnittest") AND
+                 (NOT "${name}" STREQUAL "swiftStdlibUnicodeUnittest"))
                 add_dependencies("swift-test-stdlib${VARIANT_SUFFIX}"
                     ${lipo_target}
                     ${lipo_target_static})
@@ -1366,6 +1678,8 @@ function(add_swift_library name)
       ${name}
       ${name}
       ${SWIFTLIB_SHARED_keyword}
+      ${SWIFTLIB_STATIC_keyword}
+      ${SWIFTLIB_OBJECT_LIBRARY_keyword}
       ${SWIFTLIB_SOURCES}
       SDK ${sdk}
       ARCHITECTURE ${arch}
@@ -1373,7 +1687,7 @@ function(add_swift_library name)
       LINK_LIBRARIES ${SWIFTLIB_LINK_LIBRARIES}
       FRAMEWORK_DEPENDS ${SWIFTLIB_FRAMEWORK_DEPENDS}
       FRAMEWORK_DEPENDS_WEAK ${SWIFTLIB_FRAMEWORK_DEPENDS_WEAK}
-      COMPONENT_DEPENDS ${SWIFTLIB_COMPONENT_DEPENDS}
+      LLVM_COMPONENT_DEPENDS ${SWIFTLIB_LLVM_COMPONENT_DEPENDS}
       FILE_DEPENDS ${SWIFTLIB_FILE_DEPENDS}
       C_COMPILE_FLAGS ${SWIFTLIB_C_COMPILE_FLAGS}
       SWIFT_COMPILE_FLAGS ${swiftlib_swift_compile_flags_all}
@@ -1381,13 +1695,17 @@ function(add_swift_library name)
       PRIVATE_LINK_LIBRARIES ${SWIFTLIB_PRIVATE_LINK_LIBRARIES}
       INTERFACE_LINK_LIBRARIES ${SWIFTLIB_INTERFACE_LINK_LIBRARIES}
       INCORPORATE_OBJECT_LIBRARIES ${SWIFTLIB_INCORPORATE_OBJECT_LIBRARIES}
+      INCORPORATE_OBJECT_LIBRARIES_SHARED_ONLY ${SWIFTLIB_INCORPORATE_OBJECT_LIBRARIES_SHARED_ONLY}
       ${SWIFTLIB_DONT_EMBED_BITCODE_keyword}
       ${SWIFTLIB_API_NOTES_NON_OVERLAY_keyword}
       ${SWIFTLIB_IS_STDLIB_keyword}
       ${SWIFTLIB_IS_STDLIB_CORE_keyword}
       ${SWIFTLIB_IS_SDK_OVERLAY_keyword}
       INSTALL_IN_COMPONENT "${SWIFTLIB_INSTALL_IN_COMPONENT}"
+      DEPLOYMENT_VERSION_OSX "${SWIFTLIB_DEPLOYMENT_VERSION_OSX}"
       DEPLOYMENT_VERSION_IOS "${SWIFTLIB_DEPLOYMENT_VERSION_IOS}"
+      DEPLOYMENT_VERSION_TVOS "${SWIFTLIB_DEPLOYMENT_VERSION_TVOS}"
+      DEPLOYMENT_VERSION_WATCHOS "${SWIFTLIB_DEPLOYMENT_VERSION_WATCHOS}"
       )
   endif()
 endfunction()
@@ -1413,7 +1731,7 @@ function(_add_swift_executable_single name)
   cmake_parse_arguments(SWIFTEXE_SINGLE
     "EXCLUDE_FROM_ALL;DONT_STRIP_NON_MAIN_SYMBOLS;DISABLE_ASLR"
     "SDK;ARCHITECTURE"
-    "DEPENDS;COMPONENT_DEPENDS;LINK_LIBRARIES;LINK_FAT_LIBRARIES"
+    "DEPENDS;LLVM_COMPONENT_DEPENDS;LINK_LIBRARIES;LINK_FAT_LIBRARIES"
     ${ARGN})
 
   set(SWIFTEXE_SINGLE_SOURCES ${SWIFTEXE_SINGLE_UNPARSED_ARGUMENTS})
@@ -1434,7 +1752,7 @@ function(_add_swift_executable_single name)
   # Determine compiler flags.
   set(c_compile_flags)
   set(link_flags)
-  
+
   # Add variant-specific flags.
   _add_variant_c_compile_flags(
     SDK "${SWIFTEXE_SINGLE_SDK}"
@@ -1450,6 +1768,7 @@ function(_add_swift_executable_single name)
     BUILD_TYPE "${CMAKE_BUILD_TYPE}"
     ENABLE_ASSERTIONS "${LLVM_ENABLE_ASSERTIONS}"
     ENABLE_LTO "${SWIFT_TOOLS_ENABLE_LTO}"
+    LTO_OBJECT_NAME "${name}-${SWIFTEXE_SINGLE_SDK}-${SWIFTEXE_SINGLE_ARCHITECTURE}"
     ANALYZE_CODE_COVERAGE "${SWIFT_ANALYZE_CODE_COVERAGE}"
     RESULT_VAR_NAME link_flags)
 
@@ -1460,16 +1779,21 @@ function(_add_swift_executable_single name)
     list(APPEND link_flags "-Wl,-no_pie")
   endif()
 
-  if("${CMAKE_SYSTEM_NAME}" STREQUAL "Darwin")
+  is_darwin_based_sdk("${SWIFTEXE_SINGLE_SDK}" IS_DARWIN)
+  if(IS_DARWIN)
     list(APPEND link_flags
         "-Xlinker" "-rpath"
         "-Xlinker" "@executable_path/../lib/swift/${SWIFT_SDK_${SWIFTEXE_SINGLE_SDK}_LIB_SUBDIR}")
   endif()
 
   if(SWIFT_ENABLE_GOLD_LINKER AND
-     ( "${SWIFTEXE_SINGLE_SDK}" STREQUAL "LINUX" ) )
-    # Extend the link_flags for the gold linker.
+     "${SWIFT_SDK_${SWIFTEXE_SINGLE_SDK}_OBJECT_FORMAT}" STREQUAL "ELF")
     list(APPEND link_flags "-fuse-ld=gold")
+  endif()
+  if(SWIFT_ENABLE_LLD_LINKER OR
+     ("${SWIFTLIB_SINGLE_SDK}" STREQUAL "WINDOWS" AND
+      NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "WINDOWS"))
+    list(APPEND link_flags "-fuse-ld=lld")
   endif()
 
   # Find the names of dependency library targets.
@@ -1483,10 +1807,12 @@ function(_add_swift_executable_single name)
 
   handle_swift_sources(
       dependency_target
+      unused_module_dependency_target
       SWIFTEXE_SINGLE_SOURCES SWIFTEXE_SINGLE_EXTERNAL_SOURCES ${name}
       DEPENDS
         ${SWIFTEXE_SINGLE_DEPENDS}
         ${SWIFTEXE_SINGLE_LINK_FAT_LIBRARIES_TARGETS}
+      MODULE_NAME ${name}
       SDK ${SWIFTEXE_SINGLE_SDK}
       ARCHITECTURE ${SWIFTEXE_SINGLE_ARCHITECTURE}
       IS_MAIN)
@@ -1522,7 +1848,7 @@ function(_add_swift_executable_single name)
       LIBRARY_DIR ${SWIFT_LIBRARY_OUTPUT_INTDIR})
 
   target_link_libraries("${name}" ${SWIFTEXE_SINGLE_LINK_LIBRARIES} ${SWIFTEXE_SINGLE_LINK_FAT_LIBRARIES})
-  swift_common_llvm_config("${name}" ${SWIFTEXE_SINGLE_COMPONENT_DEPENDS})
+  swift_common_llvm_config("${name}" ${SWIFTEXE_SINGLE_LLVM_COMPONENT_DEPENDS})
 
   set_target_properties(${name}
       PROPERTIES FOLDER "Swift executables")
@@ -1541,7 +1867,7 @@ function(add_swift_target_executable name)
   cmake_parse_arguments(SWIFTEXE_TARGET
     "EXCLUDE_FROM_ALL;DONT_STRIP_NON_MAIN_SYMBOLS;DISABLE_ASLR;BUILD_WITH_STDLIB"
     ""
-    "DEPENDS;COMPONENT_DEPENDS;LINK_FAT_LIBRARIES"
+    "DEPENDS;LLVM_COMPONENT_DEPENDS;LINK_FAT_LIBRARIES"
     ${ARGN})
 
   set(SWIFTEXE_TARGET_SOURCES ${SWIFTEXE_TARGET_UNPARSED_ARGUMENTS})
@@ -1593,7 +1919,7 @@ function(add_swift_target_executable name)
           ${VARIANT_NAME}
           ${SWIFTEXE_TARGET_SOURCES}
           DEPENDS ${SWIFTEXE_TARGET_DEPENDS_with_suffix}
-          COMPONENT_DEPENDS ${SWIFTEXE_TARGET_COMPONENT_DEPENDS}
+          LLVM_COMPONENT_DEPENDS ${SWIFTEXE_TARGET_LLVM_COMPONENT_DEPENDS}
           SDK "${sdk}"
           ARCHITECTURE "${arch}"
           LINK_FAT_LIBRARIES ${SWIFTEXE_TARGET_LINK_FAT_LIBRARIES}
@@ -1609,7 +1935,7 @@ endfunction()
 # Usage:
 #   add_swift_executable(name
 #     [DEPENDS dep1 ...]
-#     [COMPONENT_DEPENDS comp1 ...]
+#     [LLVM_COMPONENT_DEPENDS comp1 ...]
 #     [FILE_DEPENDS target1 ...]
 #     [LINK_LIBRARIES target1 ...]
 #     [EXCLUDE_FROM_ALL]
@@ -1623,7 +1949,7 @@ endfunction()
 #   LIBRARIES
 #     Libraries this executable depends on, without variant suffixes.
 #
-#   COMPONENT_DEPENDS
+#   LLVM_COMPONENT_DEPENDS
 #     LLVM components this executable depends on.
 #
 #   FILE_DEPENDS
@@ -1652,7 +1978,7 @@ function(add_swift_executable name)
   cmake_parse_arguments(SWIFTEXE
     "EXCLUDE_FROM_ALL;DONT_STRIP_NON_MAIN_SYMBOLS;DISABLE_ASLR"
     ""
-    "DEPENDS;COMPONENT_DEPENDS;LINK_LIBRARIES"
+    "DEPENDS;LLVM_COMPONENT_DEPENDS;LINK_LIBRARIES"
     ${ARGN})
 
   translate_flag(${SWIFTEXE_EXCLUDE_FROM_ALL}
@@ -1671,11 +1997,38 @@ function(add_swift_executable name)
       ${name}
       ${SWIFTEXE_SOURCES}
       DEPENDS ${SWIFTEXE_DEPENDS}
-      COMPONENT_DEPENDS ${SWIFTEXE_COMPONENT_DEPENDS}
+      LLVM_COMPONENT_DEPENDS ${SWIFTEXE_LLVM_COMPONENT_DEPENDS}
       LINK_LIBRARIES ${SWIFTEXE_LINK_LIBRARIES}
       SDK ${SWIFT_HOST_VARIANT_SDK}
       ARCHITECTURE ${SWIFT_HOST_VARIANT_ARCH}
       ${SWIFTEXE_EXCLUDE_FROM_ALL_FLAG}
       ${SWIFTEXE_DONT_STRIP_NON_MAIN_SYMBOLS_FLAG}
       ${SWIFTEXE_DISABLE_ASLR_FLAG})
+endfunction()
+
+macro(add_swift_tool_subdirectory name)
+  add_llvm_subdirectory(SWIFT TOOL ${name})
+endmacro()
+
+macro(add_swift_lib_subdirectory name)
+  add_llvm_subdirectory(SWIFT LIB ${name})
+endmacro()
+
+function(add_swift_host_tool executable)
+  cmake_parse_arguments(
+      ADDSWIFTHOSTTOOL # prefix
+      "" # options
+      "" # single-value args
+      "SWIFT_COMPONENT" # multi-value args
+      ${ARGN})
+
+  # Create the executable rule.
+  add_swift_executable(${executable} ${ADDSWIFTHOSTTOOL_UNPARSED_ARGUMENTS})
+
+  # And then create the install rule if we are asked to.
+  if (ADDSWIFTHOSTTOOL_SWIFT_COMPONENT)
+    swift_install_in_component(${ADDSWIFTHOSTTOOL_SWIFT_COMPONENT}
+      TARGETS ${executable}
+      RUNTIME DESTINATION bin)
+  endif()
 endfunction()

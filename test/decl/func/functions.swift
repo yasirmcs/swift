@@ -1,8 +1,8 @@
-// RUN: %target-parse-verify-swift
+// RUN: %target-typecheck-verify-swift
 
-infix operator ==== {}
-infix operator <<<< {}
-infix operator <><> {}
+infix operator ====
+infix operator <<<<
+infix operator <><>
 
 // <rdar://problem/13782566>
 // Check that func op<T>() parses without a space between the name and the
@@ -49,6 +49,9 @@ func recover_colon_arrow_1() : Int { } // expected-error {{expected '->' after f
 func recover_colon_arrow_2() : { }     // expected-error {{expected '->' after function parameter tuple}} {{30-31=->}} expected-error {{expected type for function result}}
 func recover_colon_arrow_3 : Int { }   // expected-error {{expected '->' after function parameter tuple}} {{28-29=->}} expected-error {{expected '(' in argument list of function declaration}}
 func recover_colon_arrow_4 : { }       // expected-error {{expected '->' after function parameter tuple}} {{28-29=->}} expected-error {{expected '(' in argument list of function declaration}} expected-error {{expected type for function result}}
+func recover_colon_arrow_5():Int { }   // expected-error {{expected '->' after function parameter tuple}} {{29-30= -> }}
+func recover_colon_arrow_6(): Int { }  // expected-error {{expected '->' after function parameter tuple}} {{29-30= ->}}
+func recover_colon_arrow_7() :Int { }  // expected-error {{expected '->' after function parameter tuple}} {{30-31=-> }}
 
 //===--- Check that we recover if the function does not have a body, but the
 //===--- context requires the function to have a body.
@@ -79,7 +82,7 @@ func parseError3(_ a: unknown_type, b: ) {} // expected-error {{use of undeclare
 
 func parseError4(_ a: , b: ) {} // expected-error 2{{expected parameter type following ':'}}
 
-func parseError5(_ a: b: ) {} // expected-error {{use of undeclared type 'b'}}  expected-error 2 {{expected ',' separator}} {{24-24=,}} {{24-24=,}} expected-error {{expected parameter name followed by ':'}}
+func parseError5(_ a: b: ) {} // expected-error {{use of undeclared type 'b'}}  expected-error {{expected ',' separator}} {{24-24=,}} expected-error {{expected parameter name followed by ':'}}
 
 func parseError6(_ a: unknown_type, b: ) {} // expected-error {{use of undeclared type 'unknown_type'}}  expected-error {{expected parameter type following ':'}}
 
@@ -87,7 +90,7 @@ func parseError7(_ a: Int, goo b: unknown_type) {} // expected-error {{use of un
 
 public func foo(_ a: Bool = true) -> (b: Bar, c: Bar) {} // expected-error {{use of undeclared type 'Bar'}}
 
-func parenPatternInArg((a): Int) -> Int { // expected-error {{expected parameter name followed by ':'}} expected-error {{expected ',' separator}}
+func parenPatternInArg((a): Int) -> Int { // expected-error {{expected parameter name followed by ':'}}
   return a  // expected-error {{use of unresolved identifier 'a'}}
 }
 parenPatternInArg(0)  // expected-error {{argument passed to call that takes no arguments}}
@@ -128,7 +131,7 @@ func rdar16786220(inout let c: Int) -> () { // expected-error {{parameter may no
 
 
 // <rdar://problem/17763388> ambiguous operator emits same candidate multiple times
-infix operator !!! {}
+infix operator !!!
 
 func !!!<T>(lhs: Array<T>, rhs: Array<T>) -> Bool { return false }
 func !!!<T>(lhs: UnsafePointer<T>, rhs: UnsafePointer<T>) -> Bool { return false }
@@ -141,6 +144,12 @@ func var_inout_error(inout var x : Int) {} // expected-error {{parameter may not
 
 // Unnamed parameters require the name "_":
 func unnamed(Int) { } // expected-error{{unnamed parameters must be written with the empty name '_'}}{{14-14=_: }}
+
+func typeAttrBeforeParamDecl(@convention(c) _: () -> Void) {} // expected-error{{attribute can only be applied to types, not declarations}}
+
+// FIXME: Bad diagnostics
+func bareTypeWithAttr(@convention(c) () -> Void) {} // expected-error{{attribute can only be applied to types, not declarations}}
+// expected-error @-1 {{unnamed parameters must be written with the empty name '_'}} {{38-38=_: }}
 
 // Test fixits on curried functions.
 func testCurryFixits() {
@@ -155,3 +164,7 @@ func testCurryFixits() {
   func f5(_ x: Int)()(y: Int) {} // expected-error{{curried function declaration syntax has been removed; use a single parameter list}} {{19-21=}} {{21-23=, }}
   func f5a(_ x: Int, y: Int) {}
 }
+
+// Bogus diagnostic talking about a 'var' where there is none
+func invalidInOutParam(x: inout XYZ) {}
+// expected-error@-1{{use of undeclared type 'XYZ'}}

@@ -5,14 +5,15 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
 #include "SwiftLangSupport.h"
 #include "SwiftASTManager.h"
 #include "SourceKit/Core/Context.h"
+#include "SourceKit/SwiftLang/Factory.h"
 #include "SourceKit/Support/UIdent.h"
 
 #include "swift/AST/AST.h"
@@ -91,6 +92,8 @@ static UIdent KindDeclFunctionInfixOperator("source.lang.swift.decl.function.ope
 static UIdent KindRefFunctionPrefixOperator("source.lang.swift.ref.function.operator.prefix");
 static UIdent KindRefFunctionPostfixOperator("source.lang.swift.ref.function.operator.postfix");
 static UIdent KindRefFunctionInfixOperator("source.lang.swift.ref.function.operator.infix");
+static UIdent KindDeclPrecedenceGroup("source.lang.swift.decl.precedencegroup");
+static UIdent KindRefPrecedenceGroup("source.lang.swift.ref.precedencegroup");
 static UIdent KindDeclSubscript("source.lang.swift.decl.function.subscript");
 static UIdent KindRefSubscript("source.lang.swift.ref.function.subscript");
 static UIdent KindDeclVarGlobal("source.lang.swift.decl.var.global");
@@ -138,6 +141,7 @@ static UIdent KindStmtSwitch("source.lang.swift.stmt.switch");
 static UIdent KindStmtCase("source.lang.swift.stmt.case");
 static UIdent KindStmtBrace("source.lang.swift.stmt.brace");
 static UIdent KindExprCall("source.lang.swift.expr.call");
+static UIdent KindExprArg("source.lang.swift.expr.argument");
 static UIdent KindExprArray("source.lang.swift.expr.array");
 static UIdent KindExprDictionary("source.lang.swift.expr.dictionary");
 static UIdent KindExprObjectLiteral("source.lang.swift.expr.object_literal");
@@ -149,9 +153,16 @@ static UIdent KindStructureElemCondExpr("source.lang.swift.structure.elem.condit
 static UIdent KindStructureElemPattern("source.lang.swift.structure.elem.pattern");
 static UIdent KindStructureElemTypeRef("source.lang.swift.structure.elem.typeref");
 
+static UIdent KindRangeSingleStatement("source.lang.swift.range.singlestatement");
+static UIdent KindRangeSingleExpression("source.lang.swift.range.singleexpression");
+static UIdent KindRangeSingleDeclaration("source.lang.swift.range.singledeclaration");
+
+static UIdent KindRangeMultiStatement("source.lang.swift.range.multistatement");
+
+static UIdent KindRangeInvalid("source.lang.swift.range.invalid");
 
 std::unique_ptr<LangSupport>
-LangSupport::createSwiftLangSupport(SourceKit::Context &SKCtx) {
+SourceKit::createSwiftLangSupport(SourceKit::Context &SKCtx) {
   return std::unique_ptr<LangSupport>(new SwiftLangSupport(SKCtx));
 }
 
@@ -352,6 +363,7 @@ UIdent SwiftLangSupport::getUIDForCodeCompletionDeclKind(
     case CodeCompletionDeclKind::PrefixOperatorFunction: return KindRefFunctionPrefixOperator;
     case CodeCompletionDeclKind::PostfixOperatorFunction: return KindRefFunctionPostfixOperator;
     case CodeCompletionDeclKind::InfixOperatorFunction: return KindRefFunctionInfixOperator;
+    case CodeCompletionDeclKind::PrecedenceGroup: return KindRefPrecedenceGroup;
     case CodeCompletionDeclKind::FreeFunction: return KindRefFunctionFree;
     case CodeCompletionDeclKind::StaticVar: return KindRefVarClass;
     case CodeCompletionDeclKind::InstanceVar: return KindRefVarInstance;
@@ -378,6 +390,7 @@ UIdent SwiftLangSupport::getUIDForCodeCompletionDeclKind(
   case CodeCompletionDeclKind::PrefixOperatorFunction: return KindDeclFunctionPrefixOperator;
   case CodeCompletionDeclKind::PostfixOperatorFunction: return KindDeclFunctionPostfixOperator;
   case CodeCompletionDeclKind::InfixOperatorFunction: return KindDeclFunctionInfixOperator;
+  case CodeCompletionDeclKind::PrecedenceGroup: return KindDeclPrecedenceGroup;
   case CodeCompletionDeclKind::FreeFunction: return KindDeclFunctionFree;
   case CodeCompletionDeclKind::StaticVar: return KindDeclVarClass;
   case CodeCompletionDeclKind::InstanceVar: return KindDeclVarInstance;
@@ -508,6 +521,8 @@ UIdent SwiftLangSupport::getUIDForSyntaxStructureKind(
       return KindExprDictionary;
     case SyntaxStructureKind::ObjectLiteralExpression:
       return KindExprObjectLiteral;
+    case SyntaxStructureKind::Argument:
+      return KindExprArg;
   }
 }
 
@@ -520,6 +535,16 @@ UIdent SwiftLangSupport::getUIDForSyntaxStructureElementKind(
     case SyntaxStructureElementKind::ConditionExpr: return KindStructureElemCondExpr;
     case SyntaxStructureElementKind::Pattern: return KindStructureElemPattern;
     case SyntaxStructureElementKind::TypeRef: return KindStructureElemTypeRef;
+  }
+}
+SourceKit::UIdent SwiftLangSupport::
+getUIDForRangeKind(swift::ide::RangeKind Kind) {
+  switch (Kind) {
+    case swift::ide::RangeKind::SingleExpression: return KindRangeSingleExpression;
+    case swift::ide::RangeKind::SingleStatement: return KindRangeSingleStatement;
+    case swift::ide::RangeKind::SingleDecl: return KindRangeSingleDeclaration;
+    case swift::ide::RangeKind::MultiStatement: return KindRangeMultiStatement;
+    case swift::ide::RangeKind::Invalid: return KindRangeInvalid;
   }
 }
 
@@ -694,6 +719,14 @@ bool SwiftLangSupport::printDisplayName(const swift::ValueDecl *D,
 
 bool SwiftLangSupport::printUSR(const ValueDecl *D, llvm::raw_ostream &OS) {
   return ide::printDeclUSR(D, OS);
+}
+
+bool SwiftLangSupport::printDeclTypeUSR(const ValueDecl *D, llvm::raw_ostream &OS) {
+  return ide::printDeclTypeUSR(D, OS);
+}
+
+bool SwiftLangSupport::printTypeUSR(Type Ty, llvm::raw_ostream &OS) {
+  return ide::printTypeUSR(Ty, OS);
 }
 
 bool SwiftLangSupport::printAccessorUSR(const AbstractStorageDecl *D,

@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -59,11 +59,16 @@
 # define SWIFT_RUNTIME_EXPORT __attribute__((__visibility__("default")))
 #endif
 
-#elif __CYGWIN__
-# define SWIFT_RUNTIME_EXPORT 
 #else
-// __dllexport/__dllimport for Windows?
-# error "Unimplemented object format"
+# if defined(__CYGWIN__)
+#  define SWIFT_RUNTIME_EXPORT
+# else
+#  if defined(swiftCore_EXPORTS)
+#   define SWIFT_RUNTIME_EXPORT __declspec(dllexport)
+#  else
+#   define SWIFT_RUNTIME_EXPORT __declspec(dllimport)
+#  endif
+# endif
 #endif
 
 /// Attribute for runtime-stdlib SPI interfaces.

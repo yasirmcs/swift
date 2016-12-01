@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -27,6 +27,7 @@
 
 using llvm::cast;
 
+#include <climits>
 #include <iostream>
 
 namespace swift {
@@ -45,18 +46,17 @@ class MetadataSource {
                             const std::string::const_iterator &end,
                             unsigned &result) {
     auto begin = it;
-    while (it != end) {
-      if (*it >= '0' && *it <= '9')
-        ++it;
-      else
-        break;
-    }
+    for (; it < end && *it >= '0' && *it <= '9'; ++it)
+      ;
 
-    std::string natural(begin, it);
-    if (natural.empty())
+    if (std::distance(begin, it) == 0)
       return false;
 
-    result = std::stoi(natural);
+    long int decoded = std::strtol(&*begin, nullptr, 10);
+    if ((decoded == LONG_MAX || decoded == LONG_MIN) && errno == ERANGE)
+      return false;
+
+    result = static_cast<unsigned>(decoded);
     return true;
   }
 

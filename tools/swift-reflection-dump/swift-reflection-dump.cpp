@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 // This is a host-side tool to dump remote reflection sections in swift
@@ -68,10 +68,10 @@ Architecture("arch", llvm::cl::desc("Architecture to inspect in the binary"),
 } // end namespace options
 
 template<typename T>
-static T unwrap(llvm::ErrorOr<T> value) {
-  if (!value.getError())
+static T unwrap(llvm::Expected<T> value) {
+  if (value)
     return std::move(value.get());
-  std::cerr << "swift-reflection-test error: " << value.getError().message() << "\n";
+  std::cerr << "swift-reflection-test error: " << toString(value.takeError()) << "\n";
   exit(EXIT_FAILURE);
 }
 

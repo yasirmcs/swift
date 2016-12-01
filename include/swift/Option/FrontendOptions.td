@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -61,6 +61,8 @@ def emit_fixits_path
 def verify : Flag<["-"], "verify">,
   HelpText<"Verify diagnostics against expected-{error|warning|note} "
            "annotations">;
+def verify_apply_fixes : Flag<["-"], "verify-apply-fixes">,
+  HelpText<"Like -verify, but updates the original source file">;
 
 def show_diagnostics_after_fatal : Flag<["-"], "show-diagnostics-after-fatal">,
   HelpText<"Keep emitting subsequent diagnostics after a fatal error">;
@@ -102,11 +104,20 @@ def disable_target_os_checking :
   Flag<["-"], "disable-target-os-checking">,
   HelpText<"Disable checking the target OS of serialized modules">;
 
+def enable_astscope_lookup : Flag<["-"], "enable-astscope-lookup">,
+  HelpText<"Enable ASTScope-based unqualified name lookup">;
+
 def print_clang_stats : Flag<["-"], "print-clang-stats">,
   HelpText<"Print Clang importer statistics">;
 
 def serialize_debugging_options : Flag<["-"], "serialize-debugging-options">,
   HelpText<"Always serialize options for debugging (default: only for apps)">;
+
+def autolink_library : Separate<["-"], "autolink-library">,
+  HelpText<"Add dependent library">, Flags<[FrontendOption]>;
+
+def disable_typo_correction : Flag<["-"], "disable-typo-correction">,
+  HelpText<"Disable typo correction">;
 
 } // end let Flags = [FrontendOption, NoDriverOption]
 
@@ -155,8 +166,11 @@ def disable_arc_opts : Flag<["-"], "disable-arc-opts">,
 def enable_guaranteed_closure_contexts : Flag<["-"], "enable-guaranteed-closure-contexts">,
   HelpText<"Use @guaranteed convention for closure context">;
 
+def disable_sil_partial_apply : Flag<["-"], "disable-sil-partial-apply">,
+  HelpText<"Disable use of partial_apply in SIL generation">;
+
 def remove_runtime_asserts : Flag<["-"], "remove-runtime-asserts">,
-HelpText<"Remove runtime asserts.">;
+  HelpText<"Remove runtime asserts.">;
 
 def disable_access_control : Flag<["-"], "disable-access-control">,
   HelpText<"Don't respect access control restrictions">;
@@ -216,16 +230,15 @@ def dump_clang_diagnostics : Flag<["-"], "dump-clang-diagnostics">,
 def emit_verbose_sil : Flag<["-"], "emit-verbose-sil">,
   HelpText<"Emit locations during SIL emission">;
 
-def enable_experimental_patterns : Flag<["-"], "enable-experimental-patterns">,
-  HelpText<"Enable experimental 'switch' pattern matching features">;
+def enable_sil_ownership : Flag<["-"], "enable-sil-ownership">,
+  HelpText<"Enable the SIL Ownership Model">;
+
+def assume_parsing_unqualified_ownership_sil : Flag<["-"], "assume-parsing-unqualified-ownership-sil">,
+  HelpText<"Assume unqualified SIL ownership when parsing SIL">;
 
 def enable_experimental_property_behaviors :
   Flag<["-"], "enable-experimental-property-behaviors">,
   HelpText<"Enable experimental property behaviors">;
-
-def enable_experimental_nested_generic_types :
-  Flag<["-"], "enable-experimental-nested-generic-types">,
-  HelpText<"Enable experimental support for nested generic types">;
 
 def disable_availability_checking : Flag<["-"],
   "disable-availability-checking">,
@@ -235,27 +248,11 @@ def enable_infer_import_as_member :
   Flag<["-"], "enable-infer-import-as-member">,
   HelpText<"Infer when a global could be imported as a member">;
 
-def enable_swift_newtype :
-  Flag<["-"], "enable-swift-newtype">,
-  HelpText<"Enable the swift_newtype attribute">;
-
-def enable_strip_ns_prefix :
-  Flag<["-"], "enable-strip-ns-prefix">,
-  HelpText<"Strip 'NS' prefix from Foundation entities">;
-
-def swift3_migration :
-  Flag<["-"], "swift3-migration">,
-  HelpText<"Enable Fix-It based migration aids for Swift 3">;
-
 def warn_long_function_bodies : Separate<["-"], "warn-long-function-bodies">,
   MetaVarName<"<n>">,
   HelpText<"Warns when type-checking a function takes longer than <n> ms">;
 def warn_long_function_bodies_EQ : Joined<["-"], "warn-long-function-bodies=">,
   Alias<warn_long_function_bodies>;
-
-def warn_omit_needless_words :
-  Flag<["-"], "Womit-needless-words">,
-  HelpText<"Warn about needless words in names">;
 
 def enable_source_import : Flag<["-"], "enable-source-import">,
   HelpText<"Enable importing of Swift source files">;
@@ -342,10 +339,11 @@ def enable_resilience : Flag<["-"], "enable-resilience">,
    HelpText<"Compile the module to export resilient interfaces for all "
             "public declarations by default">;
 
+def enable_class_resilience : Flag<["-"], "enable-class-resilience">,
+   HelpText<"Compile the module to export resilient interfaces for all "
+            "public classes by default (doesn't work yet)">;
+
 def group_info_path : Separate<["-"], "group-info-path">,
   HelpText<"The path to collect the group information of the compiled module">;
-
-def enable_protocol_typealiases: Flag<["-"], "enable-protocol-typealiases">,
-  HelpText<"Enable typealiases inside protocol declarations">;
 
 } // end let Flags = [FrontendOption, NoDriverOption, HelpHidden]

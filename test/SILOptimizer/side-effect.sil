@@ -1,4 +1,4 @@
-// RUN: %target-sil-opt %s -side-effects-dump -o /dev/null | FileCheck %s
+// RUN: %target-sil-opt -assume-parsing-unqualified-ownership-sil %s -module-name Swift -side-effects-dump -o /dev/null | %FileCheck %s
 
 // REQUIRES: asserts
 
@@ -7,6 +7,8 @@ import Builtin
 //////////////////
 // Declarations //
 //////////////////
+
+enum Never {}
 
 struct Int32 {
   var _value : Builtin.Int32
@@ -31,7 +33,7 @@ class X {
   init()
 }
 
-sil @exitfunc : $@convention(thin) @noreturn () -> ()
+sil [_semantics "arc.programtermination_point"] @exitfunc : $@convention(thin) () -> Never
 sil [readnone] @pure_func : $@convention(thin) () -> ()
 sil [readonly] @readonly_owned : $@convention(thin) (@owned X) -> ()
 sil [readonly] @readonly_guaranteed : $@convention(thin) (@guaranteed X) -> ()
@@ -174,11 +176,11 @@ bb0(%0 : $Int32):
   store %0 to %a : $*Int32
   %l1 = load %a : $*Int32
 
-  %b = alloc_box $Int32
-  %ba = project_box %b : $@box Int32
+  %b = alloc_box $@box Int32
+  %ba = project_box %b : $@box Int32, 0
   store %0 to %ba : $*Int32
   %l2 = load %ba : $*Int32
- 
+
   %s = alloc_stack $Int32
   store %0 to %s : $*Int32
   %l3 = load %s : $*Int32
@@ -277,7 +279,7 @@ bb0(%0 : $Int32):
 // CHECK: <func=,param0=r>
 sil @test_project_box : $@convention(thin) (@box Builtin.Int32) -> Builtin.Int32 {
 bb0(%0 : $@box Builtin.Int32):
-  %a = project_box %0 : $@box Builtin.Int32
+  %a = project_box %0 : $@box Builtin.Int32, 0
   %l = load %a : $*Builtin.Int32
   return %l : $Builtin.Int32
 }
@@ -292,7 +294,7 @@ bb0(%0 : $EP):
   %utbc = unchecked_trivial_bit_cast %se : $Builtin.BridgeObject to $Builtin.RawPointer
   %idx = integer_literal $Builtin.Int32, 0
   %irp = index_raw_pointer %utbc : $Builtin.RawPointer, %idx : $Builtin.Int32
-  %pta = pointer_to_address %irp : $Builtin.RawPointer to $*Int32
+  %pta = pointer_to_address %irp : $Builtin.RawPointer to [strict] $*Int32
   %sea = struct_element_addr %pta : $*Int32, #Int32._value
   %l = load %sea : $*Builtin.Int32
   return %l : $Builtin.Int32
@@ -425,8 +427,10 @@ bb0:
   cond_br undef, bb1, bb2
 
 bb1:
-  %u = function_ref @exitfunc : $@convention(thin) @noreturn () -> ()
-  %a = apply %u() : $@convention(thin) @noreturn () -> ()
+  %t = builtin "int_trap"() : $()
+  %b = builtin "conditionallyUnreachable"() : $()
+  %u = function_ref @exitfunc : $@convention(thin) () -> Never
+  %a = apply %u() : $@convention(thin) () -> Never
   unreachable
 
 bb2:

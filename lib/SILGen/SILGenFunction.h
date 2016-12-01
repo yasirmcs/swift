@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -184,7 +184,7 @@ public:
   SILGenBuilder(SILGenFunction &gen, SILBasicBlock *insertBB,
                 SmallVectorImpl<SILInstruction *> *insertedInsts);
   SILGenBuilder(SILGenFunction &gen, SILBasicBlock *insertBB,
-                SILInstruction *insertInst);
+                SILBasicBlock::iterator insertInst);
 
   SILGenBuilder(SILGenFunction &gen, SILFunction::iterator insertBB)
       : SILGenBuilder(gen, &*insertBB) {}
@@ -193,10 +193,12 @@ public:
       : SILGenBuilder(gen, &*insertBB, insertedInsts) {}
   SILGenBuilder(SILGenFunction &gen, SILFunction::iterator insertBB,
                 SILInstruction *insertInst)
-      : SILGenBuilder(gen, &*insertBB, insertInst) {}
+      : SILGenBuilder(gen, &*insertBB, insertInst->getIterator()) {}
   SILGenBuilder(SILGenFunction &gen, SILFunction::iterator insertBB,
                 SILBasicBlock::iterator insertInst)
-      : SILGenBuilder(gen, &*insertBB, &*insertInst) {}
+      : SILGenBuilder(gen, &*insertBB, insertInst) {}
+
+  SILGenModule &getSILGenModule() const { return SGM; }
 
   // Metatype instructions use the conformances necessary to instantiate the
   // type.
@@ -319,7 +321,7 @@ public:
   ///
   /// (This field must precede B because B's initializer calls
   /// createBasicBlock().)
-  SILBasicBlock *StartOfPostmatter = nullptr;
+  SILFunction::iterator StartOfPostmatter;
 
   /// The current section of the function that we're emitting code in.
   ///
@@ -328,12 +330,12 @@ public:
   /// normal code sequence.
   ///
   /// If the current function section is Ordinary, and
-  /// StartOfPostmatter is non-null, the current insertion block
-  /// should be ordered before that.
-  ///  
+  /// StartOfPostmatter does not point to the function end, the current
+  /// insertion block should be ordered before that.
+  ///
   /// If the current function section is Postmatter, StartOfPostmatter
-  /// is non-null and the current insertion block is ordered after
-  /// that (inclusive).
+  /// does not point to the function end and the current insertion block is
+  /// ordered after that (inclusive).
   ///
   /// (This field must precede B because B's initializer calls
   /// createBasicBlock().)
@@ -352,6 +354,8 @@ public:
   /// what maintains the notion of the current block being emitted
   /// into.
   SILGenBuilder B;
+
+  SILOpenedArchetypesTracker OpenedArchetypesTracker;
 
   struct BreakContinueDest {
     LabeledStmt *Target;
@@ -453,10 +457,8 @@ public:
 
   /// True if 'return' without an operand or falling off the end of the current
   /// function is valid.
-  bool allowsVoidReturn() const {
-    return ReturnDest.getBlock()->bbarg_empty();
-  }
-  
+  bool allowsVoidReturn() const { return ReturnDest.getBlock()->args_empty(); }
+
   /// This location, when set, is used as an override location for magic
   /// identifier expansion (e.g. #file).  This allows default argument
   /// expansion to report the location of the call, instead of the location
@@ -570,9 +572,11 @@ public:
   /// Generates code to initialize instance variables from their
   /// initializers.
   ///
+  /// \param dc The DeclContext containing the current function.
   /// \param selfDecl The 'self' declaration within the current function.
   /// \param nominal The type whose members are being initialized.
-  void emitMemberInitializers(VarDecl *selfDecl, NominalTypeDecl *nominal);
+  void emitMemberInitializers(DeclContext *dc, VarDecl *selfDecl,
+                              NominalTypeDecl *nominal);
 
   /// Emit a method that initializes the ivars of a class.
   void emitIVarInitializer(SILDeclRef ivarInitializer);
@@ -595,7 +599,7 @@ public:
   /// Generates a thunk from a native function to the conventions.
   void emitNativeToForeignThunk(SILDeclRef thunk);
   
-  // Generate a nullary function that returns the given value.
+  /// Generate a nullary function that returns the given value.
   void emitGeneratorFunction(SILDeclRef function, Expr *value);
 
   /// Generate an ObjC-compatible destructor (-dealloc).
@@ -705,14 +709,18 @@ public:
   //===--------------------------------------------------------------------===//
   // Memory management
   //===--------------------------------------------------------------------===//
-  
+
+  /// Emit debug info for the artificial error inout argument.
+  void emitErrorArgument(SILLocation Loc, unsigned ArgNo);
+
   /// emitProlog - Generates prolog code to allocate and clean up mutable
   /// storage for closure captures and local arguments.
   void emitProlog(AnyFunctionRef TheClosure,
-                  ArrayRef<ParameterList*> paramPatterns, Type resultType);
+                  ArrayRef<ParameterList *> paramPatterns, Type resultType,
+                  bool throws);
   /// returns the number of variables in paramPatterns.
-  unsigned emitProlog(ArrayRef<ParameterList*> paramPatterns,
-                      Type resultType, DeclContext *DeclCtx);
+  unsigned emitProlog(ArrayRef<ParameterList *> paramPatterns, Type resultType,
+                      DeclContext *DeclCtx, bool throws);
 
   /// Create SILArguments in the entry block that bind all the values
   /// of the given pattern suitably for being forwarded.
@@ -800,11 +808,9 @@ public:
                               SGFContext C);
 
   ManagedValue emitInjectOptional(SILLocation loc,
-                                  ManagedValue v,
-                                  CanType inputFormalType,
-                                  CanType substFormalType,
                                   const TypeLowering &expectedTL,
-                                  SGFContext ctxt);
+                                  SGFContext ctxt,
+                       llvm::function_ref<ManagedValue(SGFContext)> generator);
 
   /// Initialize a memory location with an optional value.
   ///
@@ -860,16 +866,16 @@ public:
                                                  const TypeLowering &optTL,
                                                  SGFContext C = SGFContext());
 
-  typedef std::function<ManagedValue(SILGenFunction &gen,
-                                     SILLocation loc,
-                                     ManagedValue input,
-                                     SILType loweredResultTy)> ValueTransform;
+  typedef llvm::function_ref<ManagedValue(SILGenFunction &gen,
+                                    SILLocation loc,
+                                    ManagedValue input,
+                                    SILType loweredResultTy)> ValueTransformRef;
 
   /// Emit a transformation on the value of an optional type.
   ManagedValue emitOptionalToOptional(SILLocation loc,
                                       ManagedValue input,
                                       SILType loweredResultTy,
-                                      const ValueTransform &transform);
+                                      ValueTransformRef transform);
 
   /// Emit a reinterpret-cast from one pointer type to another, using a library
   /// intrinsic.
@@ -942,7 +948,8 @@ public:
                             const TypeLowering &existentialTL,
                             ArrayRef<ProtocolConformanceRef> conformances,
                             SGFContext C,
-                            llvm::function_ref<ManagedValue (SGFContext)> F);
+                            llvm::function_ref<ManagedValue (SGFContext)> F,
+                            bool allowEmbeddedNSError = true);
 
   //===--------------------------------------------------------------------===//
   // Recursive entry points
@@ -1003,6 +1010,10 @@ public:
   ManagedValue emitRValueAsOrig(Expr *E, AbstractionPattern origPattern,
                                 const TypeLowering &origTL,
                                 SGFContext C = SGFContext());
+
+  /// Emit an r-value into temporary memory and return the managed address.
+  ManagedValue
+  emitMaterializedRValueAsOrig(Expr *E, AbstractionPattern origPattern);
   
   /// Emit the given expression, ignoring its result.
   void emitIgnoredExpr(Expr *E);
@@ -1014,6 +1025,7 @@ public:
   /// Emit 'undef' in a particular formal type.
   ManagedValue emitUndef(SILLocation loc, Type type);
   ManagedValue emitUndef(SILLocation loc, SILType type);
+  RValue emitUndefRValue(SILLocation loc, Type type);
   
   std::pair<ManagedValue, SILValue>
   emitUninitializedArrayAllocation(Type ArrayTy,
@@ -1114,6 +1126,9 @@ public:
                                 SILValue buffer, SILValue callbackStorage);
   bool maybeEmitMaterializeForSetThunk(ProtocolConformance *conformance,
                                        SILLinkage linkage,
+                                       Type selfInterfaceType,
+                                       Type selfType,
+                                       GenericEnvironment *genericEnv,
                                        FuncDecl *requirement,
                                        FuncDecl *witness,
                                        ArrayRef<Substitution> witnessSubs);
@@ -1138,7 +1153,11 @@ public:
   ManagedValue emitManagedRetain(SILLocation loc, SILValue v);
   ManagedValue emitManagedRetain(SILLocation loc, SILValue v,
                                  const TypeLowering &lowering);
-  
+
+  ManagedValue emitManagedLoadCopy(SILLocation loc, SILValue v);
+  ManagedValue emitManagedLoadCopy(SILLocation loc, SILValue v,
+                                   const TypeLowering &lowering);
+
   ManagedValue emitManagedRValueWithCleanup(SILValue v);
   ManagedValue emitManagedRValueWithCleanup(SILValue v,
                                             const TypeLowering &lowering);
@@ -1195,6 +1214,12 @@ public:
   
   void emitReturnExpr(SILLocation loc, Expr *ret);
 
+  RValue emitAnyHashableErasure(SILLocation loc,
+                                ManagedValue value,
+                                Type type,
+                                ProtocolConformanceRef conformance,
+                                SGFContext C);
+
   /// Turn a consumable managed value into a +1 managed value.
   ManagedValue getManagedValue(SILLocation loc,
                                ConsumableManagedValue value);
@@ -1228,6 +1253,14 @@ public:
                                         AbstractionPattern origResultType,
                                         SGFContext C = SGFContext());
 
+  RValue emitApplyOfStoredPropertyInitializer(
+      SILLocation loc,
+      const PatternBindingEntry &entry,
+      ArrayRef<Substitution> subs,
+      CanType resultType,
+      AbstractionPattern origResultType,
+      SGFContext C);
+
   /// A convenience method for emitApply that just handles monomorphic
   /// applications.
   RValue emitMonomorphicApply(SILLocation loc,
@@ -1249,6 +1282,9 @@ public:
                                 SILType substFnType,
                                 ArrayRef<Substitution> subs,
                                 ArrayRef<SILValue> args);
+
+  /// Emit a literal that applies the various initializers.
+  RValue emitLiteral(LiteralExpr *literal, SGFContext C);
 
   SILBasicBlock *getTryApplyErrorDest(SILLocation loc,
                                       SILResultInfo exnResult,
@@ -1390,11 +1426,11 @@ public:
                                         SILFunctionTypeRepresentation srcRep,
                                         CanType nativeTy);
 
-  /// Convert a bridged error type to the native Swift ErrorProtocol
+  /// Convert a bridged error type to the native Swift Error
   /// representation.  The value may be optional.
   ManagedValue emitBridgedToNativeError(SILLocation loc, ManagedValue v);
 
-  /// Convert a value in the native Swift ErrorProtocol representation to
+  /// Convert a value in the native Swift Error representation to
   /// a bridged error type representation.
   ManagedValue emitNativeToBridgedError(SILLocation loc, ManagedValue v,
                                         CanType bridgedType);
@@ -1413,9 +1449,8 @@ public:
                                        SILValue foreignErrorSlot,
                                  const ForeignErrorConvention &foreignError);
 
-  void emitForeignErrorBlock(SILLocation loc,
-                             SILBasicBlock *errorBB,
-                             ManagedValue errorSlot);
+  void emitForeignErrorBlock(SILLocation loc, SILBasicBlock *errorBB,
+                             Optional<ManagedValue> errorSlot);
 
   void emitForeignErrorCheck(SILLocation loc,
                              SmallVectorImpl<ManagedValue> &directResults,
@@ -1605,7 +1640,8 @@ public:
     : SGF(SGF), SavedIP(SGF.B.getInsertionBB()),
       SavedSection(SGF.CurFunctionSection) {
     FunctionSection section = (optSection ? *optSection : SavedSection);
-    assert((section != FunctionSection::Postmatter || SGF.StartOfPostmatter) &&
+    assert((section != FunctionSection::Postmatter ||
+            SGF.StartOfPostmatter != SGF.F.end()) &&
            "trying to move to postmatter without a registered start "
            "of postmatter?");
 

@@ -1,9 +1,9 @@
-// RUN: %target-parse-verify-swift
+// RUN: %target-typecheck-verify-swift
 
 // REQUIRES: objc_interop
 
 @objc protocol OP1 {
-  func reqOP1a() -> Bool
+  func reqOP1a() -> Bool // expected-note {{did you mean 'reqOP1a'?}}
 }
 
 extension OP1 {

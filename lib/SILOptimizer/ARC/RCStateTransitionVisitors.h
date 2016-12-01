@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -116,17 +116,16 @@ class BottomUpDataflowRCStateVisitor
 
 public:
   RCIdentityFunctionInfo *RCFI;
+  EpilogueARCFunctionInfo *EAFI;
   ARCState &DataflowState;
   bool FreezeOwnedArgEpilogueReleases;
-  ConsumedArgToEpilogueReleaseMatcher &EpilogueReleaseMatcher;
   BlotMapVector<SILInstruction *, BottomUpRefCountState> &IncToDecStateMap;
   ImmutablePointerSetFactory<SILInstruction> &SetFactory;
 
 public:
   BottomUpDataflowRCStateVisitor(
-      RCIdentityFunctionInfo *RCFI, ARCState &DataflowState,
-      bool FreezeOwnedArgEpilogueReleases,
-      ConsumedArgToEpilogueReleaseMatcher &ERM,
+      RCIdentityFunctionInfo *RCFI, EpilogueARCFunctionInfo *EAFI,
+      ARCState &DataflowState, bool FreezeOwnedArgEpilogueReleases,
       IncToDecStateMapTy &IncToDecStateMap,
       ImmutablePointerSetFactory<SILInstruction> &SetFactory);
   DataflowResult visitAutoreleasePoolCall(ValueBase *V);

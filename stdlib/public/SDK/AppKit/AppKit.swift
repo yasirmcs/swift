@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -56,18 +56,21 @@ public extension NSGradient {
     self.init(
       colors: objects.map { $0.0 },
       atLocations: objects.map { $0.1 },
-      colorSpace: NSColorSpace.genericRGB())
+      colorSpace: NSColorSpace.genericRGB)
   }
 }
 
 // Fix the ARGV type of NSApplicationMain, which nonsensically takes
 // argv as a const char**.
-@_silgen_name("NSApplicationMain")
 public func NSApplicationMain(
   _ argc: Int32, _ argv: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
-) -> Int32
+) -> Int32 {
+  return argv.withMemoryRebound(to: UnsafePointer<CChar>.self, capacity: Int(argc)) {
+    __NSApplicationMain(argc, $0)
+  }
+}
 
-extension NSColor : _ColorLiteralConvertible {
+extension NSColor : _ExpressibleByColorLiteral {
   public required convenience init(colorLiteralRed red: Float, green: Float,
                                    blue: Float, alpha: Float) {
     self.init(srgbRed: CGFloat(red), green: CGFloat(green),
@@ -77,7 +80,7 @@ extension NSColor : _ColorLiteralConvertible {
 
 public typealias _ColorLiteralType = NSColor
 
-extension NSImage : _ImageLiteralConvertible {
+extension NSImage : _ExpressibleByImageLiteral {
   private convenience init!(failableImageLiteral name: String) {
     self.init(named: name)
   }

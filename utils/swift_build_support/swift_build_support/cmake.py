@@ -5,8 +5,8 @@
 # Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 # Licensed under Apache License v2.0 with Runtime Library Exception
 #
-# See http://swift.org/LICENSE.txt for license information
-# See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+# See https://swift.org/LICENSE.txt for license information
+# See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 #
 # ----------------------------------------------------------------------------
 #
@@ -90,6 +90,8 @@ class CMake(object):
             sanitizers.append('Address')
         if args.enable_ubsan:
             sanitizers.append('Undefined')
+        if args.enable_tsan:
+            sanitizers.append('Thread')
         if sanitizers:
             define("LLVM_USE_SANITIZER", ";".join(sanitizers))
 
@@ -110,7 +112,7 @@ class CMake(object):
                    "Debug;Release;MinSizeRel;RelWithDebInfo")
 
         if args.clang_compiler_version:
-            major, minor, patch = args.clang_compiler_version
+            major, minor, patch, _ = args.clang_compiler_version.components
             define("LLVM_VERSION_MAJOR:STRING", major)
             define("LLVM_VERSION_MINOR:STRING", minor)
             define("LLVM_VERSION_PATCH:STRING", patch)

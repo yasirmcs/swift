@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -117,8 +117,12 @@ public:
   /// Insert a value into the enum payload.
   ///
   /// The current payload value at the given offset is assumed to be zero.
+  /// If \p numBitsUsedInValue is non-negative denotes the actual number of bits
+  /// that need storing in \p value otherwise the full bit-width of \p value
+  /// will be stored.
   void insertValue(IRGenFunction &IGF,
-                   llvm::Value *value, unsigned bitOffset);
+                   llvm::Value *value, unsigned bitOffset,
+                   int numBitsUsedInValue = -1);
   
   /// Extract a value from the enum payload.
   llvm::Value *extractValue(IRGenFunction &IGF,

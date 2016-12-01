@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -378,6 +378,10 @@ namespace swift {
     InFlightDiagnostic &fixItRemoveChars(SourceLoc Start, SourceLoc End) {
       return fixItReplaceChars(Start, End, {});
     }
+
+    /// \brief Add two replacement fix-it exchanging source ranges to the
+    /// currently-active diagnostic.
+    InFlightDiagnostic &fixItExchange(SourceRange R1, SourceRange R2);
   };
 
   /// \brief Class to track, map, and remap diagnostic severity and fatality
@@ -429,6 +433,9 @@ namespace swift {
 
     void setShowDiagnosticsAfterFatalError(bool val = true) {
       showDiagnosticsAfterFatalError = val;
+    }
+    bool getShowDiagnosticsAfterFatalError() {
+      return showDiagnosticsAfterFatalError;
     }
 
     /// \brief Whether to skip emitting warnings
@@ -504,6 +511,9 @@ namespace swift {
 
     void setShowDiagnosticsAfterFatalError(bool val = true) {
       state.setShowDiagnosticsAfterFatalError(val);
+    }
+    bool getShowDiagnosticsAfterFatalError() {
+      return state.getShowDiagnosticsAfterFatalError();
     }
 
     /// \brief Whether to skip emitting warnings

@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -77,6 +77,11 @@ SDKPath("sdk", llvm::cl::desc("The path to the SDK for use with the clang "
 static llvm::cl::opt<std::string>
 Triple("target", llvm::cl::desc("target triple"));
 
+static llvm::cl::opt<bool>
+AssumeUnqualifiedOwnershipWhenParsing(
+    "assume-parsing-unqualified-ownership-sil", llvm::cl::Hidden, llvm::cl::init(false),
+    llvm::cl::desc("Assume all parsed functions have unqualified ownership"));
+
 // This function isn't referenced outside its translation unit, but it
 // can't use the "static" keyword because its address is used for
 // getMainExecutable (since some platforms don't support taking the
@@ -111,7 +116,7 @@ removeUnwantedFunctions(SILModule *M, llvm::StringRef Name) {
         SILBasicBlock &BB = F.front();
 
         SILLocation Loc = BB.back().getLoc();
-        BB.splitBasicBlock(BB.begin());
+        BB.split(BB.begin());
         // Make terminator unreachable.
         SILBuilder(&BB).createUnreachable(Loc);
 
@@ -163,6 +168,7 @@ int main(int argc, char **argv) {
     Invocation.setRuntimeResourcePath(ResourceDir);
   Invocation.getClangImporterOptions().ModuleCachePath = ModuleCachePath;
   Invocation.setParseStdlib();
+  Invocation.getLangOptions().DisableAvailabilityChecking = true;
   Invocation.getLangOptions().EnableAccessControl = false;
   Invocation.getLangOptions().EnableObjCAttrRequiresFoundation = false;
 
@@ -193,6 +199,10 @@ int main(int argc, char **argv) {
     Invocation.setModuleName("main");
     Invocation.setInputKind(InputFileKind::IFK_SIL);
   }
+
+  SILOptions &SILOpts = Invocation.getSILOptions();
+  SILOpts.AssumeUnqualifiedOwnershipWhenParsing =
+    AssumeUnqualifiedOwnershipWhenParsing;
 
   CompilerInstance CI;
   PrintingDiagnosticConsumer PrintDiags;

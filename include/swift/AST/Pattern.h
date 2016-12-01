@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -449,102 +449,6 @@ public:
   
   static bool classof(const Pattern *P) {
     return P->getKind() == PatternKind::Is;
-  }
-};
-
-namespace detail {
-  /// A nominal type subpattern record.
-  class NominalTypePatternElement {
-    /// The location of the property name.
-    SourceLoc PropertyLoc;
-    /// The location of the colon.
-    SourceLoc ColonLoc;
-    /// The referenced property name.
-    Identifier PropertyName;
-    /// The referenced property.
-    VarDecl *Property;
-    /// The subpattern.
-    Pattern *SubPattern;
-  public:
-    NominalTypePatternElement(SourceLoc PropLoc, Identifier PropName,
-                              VarDecl *Prop, SourceLoc ColonLoc, Pattern *SubP)
-      : PropertyLoc(PropLoc), ColonLoc(ColonLoc),
-        PropertyName(PropName), Property(Prop),
-        SubPattern(SubP)
-    {}
-    
-    SourceLoc getPropertyLoc() const { return PropertyLoc; }
-    SourceLoc getColonLoc() const { return ColonLoc; }
-    
-    VarDecl *getProperty() const { return Property; }
-    void setProperty(VarDecl *v) { Property = v; }
-    
-    Identifier getPropertyName() const { return PropertyName; }
-    
-    const Pattern *getSubPattern() const { return SubPattern; }
-    Pattern *getSubPattern() { return SubPattern; }
-    void setSubPattern(Pattern *p) { SubPattern = p; }
-  };
-} // end namespace detail
-  
-/// A pattern that matches a nominal type and destructures elements out of it.
-/// The match succeeds if the loaded property values all match their associated
-/// subpatterns.
-class NominalTypePattern final : public Pattern,
-    private llvm::TrailingObjects<NominalTypePattern,
-                                  detail::NominalTypePatternElement> {
-  friend TrailingObjects;
-
-public:
-  /// A nominal type subpattern record.
-  using Element = detail::NominalTypePatternElement;
-
-private:
-  TypeLoc CastType;
-  SourceLoc LParenLoc, RParenLoc;
-  
-  unsigned NumElements;
-
-  NominalTypePattern(TypeLoc CastTy, SourceLoc LParenLoc,
-                     ArrayRef<Element> Elements,
-                     SourceLoc RParenLoc,
-                     Optional<bool> implicit = None)
-    : Pattern(PatternKind::NominalType), CastType(CastTy),
-      LParenLoc(LParenLoc), RParenLoc(RParenLoc),
-      NumElements(Elements.size())
-  {
-    if (implicit.hasValue() ? *implicit : !CastTy.hasLocation())
-      setImplicit();
-    std::uninitialized_copy(Elements.begin(), Elements.end(),
-                            getTrailingObjects<Element>());
-  }
-  
-public:
-  static NominalTypePattern *create(TypeLoc CastTy, SourceLoc LParenLoc,
-                                    ArrayRef<Element> Elements,
-                                    SourceLoc RParenLoc,
-                                    ASTContext &C,
-                                    Optional<bool> implicit = None);
-
-  TypeLoc &getCastTypeLoc() { return CastType; }
-  TypeLoc getCastTypeLoc() const { return CastType; }
-  
-  ArrayRef<Element> getElements() const {
-    return {getTrailingObjects<Element>(), NumElements};
-  }
-  MutableArrayRef<Element> getMutableElements() {
-    return {getTrailingObjects<Element>(), NumElements};
-  }
-  
-  SourceLoc getLoc() const { return CastType.getSourceRange().Start; }
-  SourceLoc getLParenLoc() const { return LParenLoc; }
-  SourceLoc getRParenLoc() const { return RParenLoc; }
-  SourceRange getSourceRange() const {
-    return {getLoc(), RParenLoc};
-  }
-  
-  static bool classof(const Pattern *P) {
-    return P->getKind() == PatternKind::NominalType;
   }
 };
   

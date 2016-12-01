@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -68,6 +68,13 @@ bool SILType::isTrivial(SILModule &M) const {
 
 bool SILType::isReferenceCounted(SILModule &M) const {
   return M.getTypeLowering(*this).isReferenceCounted();
+}
+
+bool SILType::isNoReturnFunction() const {
+  if (auto funcTy = dyn_cast<SILFunctionType>(getSwiftRValueType()))
+    return funcTy->getSILResult().getSwiftRValueType()->isUninhabited();
+
+  return false;
 }
 
 std::string SILType::getAsString() const {
@@ -273,9 +280,8 @@ bool SILType::canUnsafeCastValue(SILType fromType, SILType toType,
 // TODO: handle casting to a loadable existential by generating
 // init_existential_ref. Until then, only promote to a heap object dest.
 bool SILType::canRefCast(SILType operTy, SILType resultTy, SILModule &M) {
-  OptionalTypeKind otk;
-  auto fromTy = unwrapAnyOptionalType(operTy, M, otk);
-  auto toTy = unwrapAnyOptionalType(resultTy, M, otk);
+  auto fromTy = operTy.unwrapAnyOptionalType();
+  auto toTy = resultTy.unwrapAnyOptionalType();
   return (fromTy.isHeapObjectReferenceType() || fromTy.isClassExistentialType())
     && toTy.isHeapObjectReferenceType();
 }
@@ -302,6 +308,12 @@ SILType SILType::getFieldType(VarDecl *field, SILModule &M) const {
 SILType SILType::getEnumElementType(EnumElementDecl *elt, SILModule &M) const {
   assert(elt->getDeclContext() == getEnumOrBoundGenericEnum());
   assert(elt->hasArgumentType());
+
+  if (auto objectType = getSwiftRValueType().getAnyOptionalObjectType()) {
+    assert(elt == M.getASTContext().getOptionalSomeDecl());
+    return SILType(objectType, getCategory());
+  }
+
   auto substEltTy =
     getSwiftRValueType()->getTypeOfMember(M.getSwiftModule(),
                                           elt, nullptr,
@@ -427,28 +439,25 @@ bool SILType::aggregateHasUnreferenceableStorage() const {
   return false;
 }
 
-OptionalTypeKind SILType::getOptionalTypeKind() const {
-  OptionalTypeKind result;
-  getSwiftRValueType()->getAnyOptionalObjectType(result);
-  return result;
-}
-
-SILType SILType::getAnyOptionalObjectType(SILModule &M,
-                                          OptionalTypeKind &OTK) const {
-  if (auto objectTy = getSwiftRValueType()->getAnyOptionalObjectType(OTK)) {
-    auto loweredTy
-      = M.Types.getLoweredType(AbstractionPattern::getOpaque(), objectTy);
-    
-    return SILType(loweredTy.getSwiftRValueType(), getCategory());
+SILType SILType::getAnyOptionalObjectType() const {
+  if (auto objectTy = getSwiftRValueType().getAnyOptionalObjectType()) {
+    return SILType(objectTy, getCategory());
   }
 
-  OTK = OTK_None;
   return SILType();
+}
+
+SILType SILType::unwrapAnyOptionalType() const {
+  if (auto objectTy = getAnyOptionalObjectType()) {
+    return objectTy;
+  }
+
+  return *this;
 }
 
 /// True if the given type value is nonnull, and the represented type is NSError
 /// or CFError, the error classes for which we support "toll-free" bridging to
-/// ErrorProtocol existentials.
+/// Error existentials.
 static bool isBridgedErrorClass(SILModule &M,
                                 Type t) {
   if (!t)
@@ -458,17 +467,17 @@ static bool isBridgedErrorClass(SILModule &M,
     t = archetypeType->getSuperclass();
 
   // NSError (TODO: and CFError) can be bridged.
-  auto errorType = M.Types.getNSErrorType();
-  if (t && errorType && t->isEqual(errorType)) {
+  auto nsErrorType = M.Types.getNSErrorType();
+  if (t && nsErrorType && nsErrorType->isExactSuperclassOf(t, nullptr)) {
     return true;
   }
   
   return false;
 }
 
-static bool isErrorProtocolExistential(ArrayRef<ProtocolDecl*> protocols) {
+static bool isErrorExistential(ArrayRef<ProtocolDecl*> protocols) {
   return protocols.size() == 1
-    && protocols[0]->isSpecificProtocol(KnownProtocolKind::ErrorProtocol);
+    && protocols[0]->isSpecificProtocol(KnownProtocolKind::Error);
 }
 
 ExistentialRepresentation
@@ -485,9 +494,9 @@ SILType::getPreferredExistentialRepresentation(SILModule &M,
   if (!getSwiftRValueType()->isAnyExistentialType(protocols))
     return ExistentialRepresentation::None;
   
-  // The (uncomposed) ErrorProtocol existential uses a special boxed representation.
-  if (isErrorProtocolExistential(protocols)) {
-    // NSError or CFError references can be adopted directly as ErrorProtocol
+  // The (uncomposed) Error existential uses a special boxed representation.
+  if (isErrorExistential(protocols)) {
+    // NSError or CFError references can be adopted directly as Error
     // existentials.
     if (isBridgedErrorClass(M, containedType)) {
       return ExistentialRepresentation::Class;
@@ -521,10 +530,10 @@ SILType::canUseExistentialRepresentation(SILModule &M,
     SmallVector<ProtocolDecl *, 4> protocols;
     if (!getSwiftRValueType()->isAnyExistentialType(protocols))
       return false;
-    // The (uncomposed) ErrorProtocol existential uses a special boxed
+    // The (uncomposed) Error existential uses a special boxed
     // representation. It can also adopt class references of bridged error types
     // directly.
-    if (isErrorProtocolExistential(protocols))
+    if (isErrorExistential(protocols))
       return repr == ExistentialRepresentation::Boxed
         || (repr == ExistentialRepresentation::Class
             && isBridgedErrorClass(M, containedType));
@@ -540,4 +549,65 @@ SILType::canUseExistentialRepresentation(SILModule &M,
   case ExistentialRepresentation::Metatype:
     return is<ExistentialMetatypeType>();
   }
+}
+
+//
+// SILBoxType implementation
+//
+
+/// TODO: Transitional factory to present the single-type SILBoxType::get
+/// interface.
+CanSILBoxType SILBoxType::get(CanType boxedType) {
+  // TODO: SILBoxTypes should be keyed by layout and generic arguments instead
+  // of by a single boxed type.
+  ASTContext &ctx = boxedType->getASTContext();
+  auto &SILBoxTypes = ctx.getSILBoxTypes();
+  auto found = SILBoxTypes.find(boxedType);
+  if (found != SILBoxTypes.end())
+    return CanSILBoxType(found->second);
+  
+  // We know that we'll allocate the SILBoxType with a single substitution in
+  // this case.
+  void *mem = ctx.Allocate(totalSizeToAlloc<Substitution>(1),
+                           alignof(SILBoxType));
+  
+  auto singleGenericParamSignature = ctx.getSingleGenericParameterSignature();
+  auto boxTy = ::new (mem) SILBoxType(ctx,
+              SILLayout::get(ctx, singleGenericParamSignature,
+                             SILField(CanType(singleGenericParamSignature
+                                                ->getGenericParams()[0]),
+                             /*mutable*/ true)),
+              Substitution(boxedType, {}));
+  SILBoxTypes.insert({boxedType, boxTy});
+  return CanSILBoxType(boxTy);
+}
+
+SILBoxType::SILBoxType(ASTContext &C,
+                       SILLayout *Layout, ArrayRef<Substitution> Args)
+  : TypeBase(TypeKind::SILBox, &C,
+             getRecursivePropertiesFromSubstitutions(Args)),
+    Layout(Layout),
+    NumGenericArgs(Args.size())
+{
+  // Check that the generic args are reasonable for the box's signature.
+  assert((Layout->getGenericSignature()->getSubstitutionMap(Args), true));
+  auto paramsBuf = getTrailingObjects<Substitution>();
+  for (unsigned i = 0; i < NumGenericArgs; ++i)
+    ::new (paramsBuf + i) Substitution(Args[i]);
+}
+
+RecursiveTypeProperties SILBoxType::
+getRecursivePropertiesFromSubstitutions(ArrayRef<Substitution> Params) {
+  RecursiveTypeProperties props;
+  for (auto &param : Params) {
+    props |= param.getReplacement()->getRecursiveProperties();
+  }
+  return props;
+}
+
+/// TODO: Transitional accessor for single-type boxes.
+CanType SILBoxType::getBoxedType() const {
+  assert(getLayout()->getFields().size() == 1
+         && "is not a single-field box");
+  return getFieldType(0).getSwiftRValueType();
 }

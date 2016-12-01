@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -16,17 +16,46 @@
 
 private let ε: CGFloat = 2.22045e-16
 
-extension AffineTransform : ReferenceConvertible, Hashable, CustomStringConvertible {
+public struct AffineTransform : ReferenceConvertible, Hashable, CustomStringConvertible {
+    public var m11, m12, m21, m22, tX, tY: CGFloat
+    
     public typealias ReferenceType = NSAffineTransform
-
-    private init(reference: NSAffineTransform) {
-        self = reference.transformStruct
+    
+    /**
+     Creates an affine transformation.
+    */
+    public init(m11: CGFloat, m12: CGFloat, m21: CGFloat, m22: CGFloat, tX: CGFloat, tY: CGFloat) {
+        self.m11 = m11
+        self.m12 = m12
+        self.m21 = m21
+        self.m22 = m22
+        self.tX = tX
+        self.tY = tY
     }
     
-    private var reference : NSAffineTransform {
+    fileprivate init(reference: NSAffineTransform) {
+        m11 = reference.transformStruct.m11
+        m12 = reference.transformStruct.m12
+        m21 = reference.transformStruct.m21
+        m22 = reference.transformStruct.m22
+        tX = reference.transformStruct.tX
+        tY = reference.transformStruct.tY
+    }
+    
+    fileprivate var reference : NSAffineTransform {
         let ref = NSAffineTransform()
-        ref.transformStruct = self
+        ref.transformStruct = NSAffineTransformStruct(m11: m11, m12: m12, m21: m21, m22: m22, tX: tX, tY: tY)
         return ref
+    }
+    
+    /**
+     Creates an affine transformation matrix with identity values.
+     - seealso: identity
+    */
+    public init() {
+        self.init(m11: CGFloat(1.0), m12: CGFloat(0.0),
+                  m21: CGFloat(0.0), m22: CGFloat(1.0),
+                  tX: CGFloat(0.0), tY: CGFloat(0.0))
     }
     
     /**
@@ -187,7 +216,7 @@ extension AffineTransform : ReferenceConvertible, Hashable, CustomStringConverti
     }
     
     /**
-     Inverts the transformation matrix if possible. Matricies with a determinant that is less than
+     Inverts the transformation matrix if possible. Matrices with a determinant that is less than
      the smallest valid representation of a double value greater than zero are considered to be 
      invalid for representing as an inverse. If the input AffineTransform can potentially fall into
      this case then the inverted() method is suggested to be used instead since that will return
@@ -254,28 +283,23 @@ extension AffineTransform : ReferenceConvertible, Hashable, CustomStringConverti
     public var debugDescription: String {
         return description
     }
-}
 
-public func ==(lhs: AffineTransform, rhs: AffineTransform) -> Bool {
-    return lhs.m11 == rhs.m11 && lhs.m12 == rhs.m12 &&
-           lhs.m21 == rhs.m21 && lhs.m22 == rhs.m22 &&
-           lhs.tX == rhs.tX && lhs.tY == rhs.tY
+    public static func ==(lhs: AffineTransform, rhs: AffineTransform) -> Bool {
+        return lhs.m11 == rhs.m11 && lhs.m12 == rhs.m12 &&
+               lhs.m21 == rhs.m21 && lhs.m22 == rhs.m22 &&
+               lhs.tX == rhs.tX && lhs.tY == rhs.tY
+    }
+
 }
 
 extension AffineTransform : _ObjectiveCBridgeable {
-    public static func _isBridgedToObjectiveC() -> Bool {
-        return true
-    }
-    
     public static func _getObjectiveCType() -> Any.Type {
         return NSAffineTransform.self
     }
     
     @_semantics("convertToObjectiveC")
     public func _bridgeToObjectiveC() -> NSAffineTransform {
-        let t = NSAffineTransform()
-        t.transformStruct = self
-        return t
+        return self.reference
     }
     
     public static func _forceBridgeFromObjectiveC(_ x: NSAffineTransform, result: inout AffineTransform?) {
@@ -285,7 +309,7 @@ extension AffineTransform : _ObjectiveCBridgeable {
     }
     
     public static func _conditionallyBridgeFromObjectiveC(_ x: NSAffineTransform, result: inout AffineTransform?) -> Bool {
-        result = x.transformStruct
+        result = AffineTransform(reference: x)
         return true // Can't fail
     }
 
@@ -293,6 +317,14 @@ extension AffineTransform : _ObjectiveCBridgeable {
         var result: AffineTransform?
         _forceBridgeFromObjectiveC(x!, result: &result)
         return result!
+    }
+}
+
+extension NSAffineTransform : _HasCustomAnyHashableRepresentation {
+    // Must be @nonobjc to avoid infinite recursion during bridging.
+    @nonobjc
+    public func _toCustomAnyHashable() -> AnyHashable? {
+        return AnyHashable(self as AffineTransform)
     }
 }
 

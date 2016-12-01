@@ -5,14 +5,14 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
 #if os(OSX) || os(iOS) || os(watchOS) || os(tvOS)
 import Darwin
-#elseif os(Linux) || os(FreeBSD) || os(Android)
+#elseif os(Linux) || os(FreeBSD) || os(PS4) || os(Android)
 import Glibc
 #endif
 
@@ -43,8 +43,8 @@ public var _stdlib_PTHREAD_BARRIER_SERIAL_THREAD: CInt {
 }
 
 public struct _stdlib_pthread_barrier_t {
-  var mutex: UnsafeMutablePointer<pthread_mutex_t>? = nil
-  var cond: UnsafeMutablePointer<pthread_cond_t>? = nil
+  var mutex: UnsafeMutablePointer<pthread_mutex_t>?
+  var cond: UnsafeMutablePointer<pthread_cond_t>?
 
   /// The number of threads to synchronize.
   var count: CUnsignedInt = 0
@@ -67,12 +67,12 @@ public func _stdlib_pthread_barrier_init(
     errno = EINVAL
     return -1
   }
-  barrier.pointee.mutex = UnsafeMutablePointer(allocatingCapacity: 1)
+  barrier.pointee.mutex = UnsafeMutablePointer.allocate(capacity: 1)
   if pthread_mutex_init(barrier.pointee.mutex!, nil) != 0 {
     // FIXME: leaking memory.
     return -1
   }
-  barrier.pointee.cond = UnsafeMutablePointer(allocatingCapacity: 1)
+  barrier.pointee.cond = UnsafeMutablePointer.allocate(capacity: 1)
   if pthread_cond_init(barrier.pointee.cond!, nil) != 0 {
     // FIXME: leaking memory, leaking a mutex.
     return -1
@@ -93,9 +93,9 @@ public func _stdlib_pthread_barrier_destroy(
     return -1
   }
   barrier.pointee.cond!.deinitialize()
-  barrier.pointee.cond!.deallocateCapacity(1)
+  barrier.pointee.cond!.deallocate(capacity: 1)
   barrier.pointee.mutex!.deinitialize()
-  barrier.pointee.mutex!.deallocateCapacity(1)
+  barrier.pointee.mutex!.deallocate(capacity: 1)
   return 0
 }
 

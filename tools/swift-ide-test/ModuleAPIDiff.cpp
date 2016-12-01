@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -192,7 +192,6 @@ decl-attributes ::=
         IsFinal: <bool>
         IsLazy: <bool>
         IsMutating: <bool>
-        IsNoreturn: <bool>
         IsObjC: <bool>
         IsOptional: <bool>
         IsRequired: <bool>
@@ -258,7 +257,6 @@ using llvm::Optional;
   MACRO(IsFinal) \
   MACRO(IsLazy) \
   MACRO(IsMutating) \
-  MACRO(IsNoreturn) \
   MACRO(IsObjC) \
   MACRO(IsOptional) \
   MACRO(IsRequired) \
@@ -765,9 +763,6 @@ public:
         ResultGS.SameTypeRequirements.emplace_back(
             sma::SameTypeRequirement{convertToTypeName(Req.getFirstType()),
                                      convertToTypeName(Req.getSecondType())});
-        break;
-      case RequirementKind::WitnessMarker:
-        // This RequirementKind is a hack; skip it.
         break;
       }
     }

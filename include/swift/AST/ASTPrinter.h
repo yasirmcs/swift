@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -155,8 +155,6 @@ public:
 
   // Helper functions.
 
-  void printTypeRef(DynamicSelfType *T, Identifier Name);
-
   void printSeparator(bool &first, StringRef separator) {
     if (first) {
       first = false;
@@ -175,18 +173,25 @@ public:
 
   ASTPrinter &operator<<(DeclName name);
 
-  void printKeyword(StringRef Name) {
+  void printKeyword(StringRef name) {
     callPrintNamePre(PrintNameContext::Keyword);
-    *this << Name;
+    *this << name;
     printNamePost(PrintNameContext::Keyword);
   }
 
-  void printAttrName(StringRef Name, bool needAt = false) {
+  void printAttrName(StringRef name, bool needAt = false) {
     callPrintNamePre(PrintNameContext::Attribute);
     if (needAt)
       *this << "@";
-    *this << Name;
+    *this << name;
     printNamePost(PrintNameContext::Attribute);
+  }
+
+  ASTPrinter &printSimpleAttr(StringRef name, bool needAt = false) {
+    callPrintStructurePre(PrintStructureKind::BuiltinAttribute);
+    printAttrName(name, needAt);
+    printStructurePost(PrintStructureKind::BuiltinAttribute);
+    return *this;
   }
 
   void printName(Identifier Name,
@@ -258,8 +263,6 @@ public:
   /// To sanitize a malformed utf8 string to a well-formed one.
   static std::string sanitizeUtf8(StringRef Text);
   static ValueDecl* findConformancesWithDocComment(ValueDecl *VD);
-  static bool printTypeInterface(Type Ty, DeclContext *DC, std::string &Result);
-  static bool printTypeInterface(Type Ty, DeclContext *DC, llvm::raw_ostream &Out);
 
 private:
   virtual void anchor();
@@ -274,6 +277,20 @@ public:
   explicit StreamPrinter(raw_ostream &OS) : OS(OS) {}
 
   void printText(StringRef Text) override;
+};
+
+/// AST stream printer that adds extra indentation to each line.
+class ExtraIndentStreamPrinter : public StreamPrinter {
+  StringRef ExtraIndent;
+
+public:
+  ExtraIndentStreamPrinter(raw_ostream &out, StringRef extraIndent)
+  : StreamPrinter(out), ExtraIndent(extraIndent) { }
+
+  virtual void printIndent() {
+    printText(ExtraIndent);
+    StreamPrinter::printIndent();
+  }
 };
 
 bool shouldPrint(const Decl *D, PrintOptions &Options);

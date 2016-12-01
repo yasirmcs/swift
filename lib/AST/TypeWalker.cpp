@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -67,6 +67,7 @@ class Traversal : public TypeVisitor<Traversal, bool>
     return doIt(ty->getSelfType());
   }
   bool visitSubstitutableType(SubstitutableType *ty) { return false; }
+  bool visitAssociatedTypeType(AssociatedTypeType *ty) { return false; }
 
   bool visitSubstitutedType(SubstitutedType *ty) {
     if (Walker.shouldVisitOriginalSubstitutedType())
@@ -100,9 +101,6 @@ class Traversal : public TypeVisitor<Traversal, bool>
       case RequirementKind::Superclass:
         if (doIt(req.getSecondType()))
           return true;
-        break;
-
-      case RequirementKind::WitnessMarker:
         break;
       }
     }

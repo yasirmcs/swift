@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -314,6 +314,23 @@ void LinkEntity::mangle(raw_ostream &buffer) const {
     return mangler.finalize(buffer);
   case Kind::SILGlobalVariable:
     mangler.appendSymbol(getSILGlobalVariable()->getName());
+    return mangler.finalize(buffer);
+
+  case Kind::ReflectionBuiltinDescriptor:
+    mangler.append("_TMRb");
+    mangler.mangleType(getType(), getUncurryLevel());
+    return mangler.finalize(buffer);
+  case Kind::ReflectionFieldDescriptor:
+    mangler.append("_TMRf");
+    mangler.mangleType(getType(), getUncurryLevel());
+    return mangler.finalize(buffer);
+  case Kind::ReflectionAssociatedTypeDescriptor:
+    mangler.append("_TMRa");
+    mangler.mangleProtocolConformance(getProtocolConformance());
+    return mangler.finalize(buffer);
+  case Kind::ReflectionSuperclassDescriptor:
+    mangler.append("_TMRs");
+    mangler.mangleNominalType(cast<ClassDecl>(getDecl()));
     return mangler.finalize(buffer);
   }
   llvm_unreachable("bad entity kind!");

@@ -5,13 +5,13 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef __SWIFT_IRGen_GenEnum_H__
-#define __SWIFT_IRGen_GenEnum_H__
+#ifndef SWIFT_IRGEN_GENENUM_H
+#define SWIFT_IRGEN_GENENUM_H
 
 #include "TypeInfo.h"
 
@@ -165,18 +165,18 @@ public:
   virtual ~EnumImplStrategy() { }
   
   /// Construct a layout strategy appropriate to the enum type.
-  static EnumImplStrategy *get(TypeConverter &TC,
-                               SILType Type,
-                               EnumDecl *theEnum);
+  static std::unique_ptr<EnumImplStrategy> get(TypeConverter &TC,
+                                               SILType Type,
+                                               EnumDecl *theEnum);
   
   /// Given an incomplete StructType for the enum, completes layout of the
   /// storage type, calculates its size and alignment, and produces the
   /// TypeInfo for the enum.
   virtual TypeInfo *completeEnumTypeLayout(TypeConverter &TC,
-                                            SILType Type,
-                                            EnumDecl *theEnum,
-                                            llvm::StructType *enumTy) = 0;
-  
+                                           SILType Type,
+                                           EnumDecl *theEnum,
+                                           llvm::StructType *enumTy) = 0;
+
   const TypeInfo &getTypeInfo() const {
     assert(TI);
     return *TI;

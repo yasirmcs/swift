@@ -1,4 +1,4 @@
-// RUN: %target-sil-opt -enable-sil-verify-all -remove-pins %s | FileCheck %s
+// RUN: %target-sil-opt -assume-parsing-unqualified-ownership-sil -enable-sil-verify-all -remove-pins %s | %FileCheck %s
 
 sil_stage canonical
 
@@ -185,7 +185,7 @@ bb0(%0 : $*MyArray<MyInt>):
   %8 = tuple(%6 : $Optional<Builtin.NativeObject>, %7 : $Builtin.Int1)
   %9 = tuple_extract %8 : $(Optional<Builtin.NativeObject>, Builtin.Int1), 0
   %10 = tuple_extract %8 : $(Optional<Builtin.NativeObject>, Builtin.Int1), 1
-  strong_unpin %9 : $Optional<Builtin.NativeObject>  
+  strong_unpin %9 : $Optional<Builtin.NativeObject>
   %11 = tuple_extract %8 : $(Optional<Builtin.NativeObject>, Builtin.Int1), 1
   %12 = tuple(%10 : $Builtin.Int1, %11 : $Builtin.Int1)
   return %12 : $(Builtin.Int1, Builtin.Int1)
@@ -308,7 +308,7 @@ bb0(%0 : $*MyArray<MyInt>, %1 : $MyInt):
   %6 = unchecked_trivial_bit_cast %5 : $Builtin.NativeObject to $Builtin.RawPointer
   %7 = index_raw_pointer %6 : $Builtin.RawPointer, %2 : $Builtin.Word
   %8 = strong_pin %5 : $Builtin.NativeObject
-  %9 = pointer_to_address %7 : $Builtin.RawPointer to $*MyInt
+  %9 = pointer_to_address %7 : $Builtin.RawPointer to [strict] $*MyInt
   %10 = integer_literal $Builtin.Word, 2
   %11 = index_addr %9 : $*MyInt, %10 : $Builtin.Word
   %12 = mark_dependence %11 : $*MyInt on %8 : $Optional<Builtin.NativeObject>
@@ -332,7 +332,7 @@ bb0(%0 : $*MyArray<MyInt>, %1 : $MyInt, %16 : $Optional<Builtin.NativeObject>):
   %6 = unchecked_trivial_bit_cast %5 : $Builtin.NativeObject to $Builtin.RawPointer
   %7 = index_raw_pointer %6 : $Builtin.RawPointer, %2 : $Builtin.Word
   %8 = strong_pin %5 : $Builtin.NativeObject
-  %9 = pointer_to_address %7 : $Builtin.RawPointer to $*MyInt
+  %9 = pointer_to_address %7 : $Builtin.RawPointer to [strict] $*MyInt
   %10 = integer_literal $Builtin.Word, 2
   %11 = index_addr %9 : $*MyInt, %10 : $Builtin.Word
   %12 = mark_dependence %8 : $Optional<Builtin.NativeObject> on %16 : $Optional<Builtin.NativeObject>

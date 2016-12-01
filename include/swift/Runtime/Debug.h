@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -20,6 +20,7 @@
 #include <llvm/Support/Compiler.h>
 #include <stdint.h>
 #include "swift/Runtime/Config.h"
+#include "swift/Runtime/Metadata.h"
 
 #ifdef SWIFT_HAVE_CRASHREPORTERCLIENT
 
@@ -76,6 +77,13 @@ static inline void crash(const char *message) {
   __builtin_trap();
 #endif
   __builtin_unreachable();
+}
+
+/// Report a corrupted type object.
+LLVM_ATTRIBUTE_NORETURN
+LLVM_ATTRIBUTE_ALWAYS_INLINE // Minimize trashed registers
+static inline void _failCorruptType(const Metadata *type) {
+  swift::crash("Corrupt Swift type object");
 }
 
 // swift::fatalError() halts with a crash log message, 

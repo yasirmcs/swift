@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -23,17 +23,23 @@ class SILModuleTransform;
 class PrettyStackTraceSILFunctionTransform
     : public llvm::PrettyStackTraceEntry {
   SILFunctionTransform *SFT;
+  unsigned PassNumber;
 
 public:
-  PrettyStackTraceSILFunctionTransform(SILFunctionTransform *SFT) : SFT(SFT) {}
+  PrettyStackTraceSILFunctionTransform(SILFunctionTransform *SFT,
+                                       unsigned PassNumber)
+      : SFT(SFT), PassNumber(PassNumber) {}
   virtual void print(llvm::raw_ostream &OS) const;
 };
 
 class PrettyStackTraceSILModuleTransform : public llvm::PrettyStackTraceEntry {
   SILModuleTransform *SMT;
+  unsigned PassNumber;
 
 public:
-  PrettyStackTraceSILModuleTransform(SILModuleTransform *SMT) : SMT(SMT) {}
+  PrettyStackTraceSILModuleTransform(SILModuleTransform *SMT,
+                                     unsigned PassNumber)
+      : SMT(SMT), PassNumber(PassNumber) {}
   virtual void print(llvm::raw_ostream &OS) const;
 };
 

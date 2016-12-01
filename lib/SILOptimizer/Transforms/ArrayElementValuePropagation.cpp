@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 #define DEBUG_TYPE "array-element-propagation"
@@ -67,7 +67,7 @@ class ArrayAllocation {
   bool findValueReplacements();
   bool isInitializationWithKnownElements();
   bool mapInitializationStores();
-  bool analyseArrayValueUses();
+  bool analyzeArrayValueUses();
   bool recursivelyCollectUses(ValueBase *Def);
   bool collectForwardableValues();
 
@@ -94,7 +94,7 @@ bool ArrayAllocation::mapInitializationStores() {
 
   // Match initialization stores.
   // %83 = struct_extract %element_buffer : $UnsafeMutablePointer<Int>
-  // %84 = pointer_to_address %83 : $Builtin.RawPointer to $*Int
+  // %84 = pointer_to_address %83 : $Builtin.RawPointer to strict $*Int
   // store %85 to %84 : $*Int
   // %87 = integer_literal $Builtin.Word, 1
   // %88 = index_addr %84 : $*Int, %87 : $Builtin.Word
@@ -172,7 +172,7 @@ bool ArrayAllocation::findValueReplacements() {
     return false;
 
   // The array value was stored or has escaped.
-  if (!analyseArrayValueUses())
+  if (!analyzeArrayValueUses())
     return false;
 
   // No count users.
@@ -184,7 +184,7 @@ bool ArrayAllocation::findValueReplacements() {
 
 /// Collect all get_element users and check that there are no escapes or uses
 /// that could change the array value.
-bool ArrayAllocation::analyseArrayValueUses() {
+bool ArrayAllocation::analyzeArrayValueUses() {
   return recursivelyCollectUses(ArrayValue);
 }
 

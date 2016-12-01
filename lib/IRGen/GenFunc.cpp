@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -555,6 +555,7 @@ const TypeInfo *TypeConverter::convertFunctionType(SILFunctionType *T) {
   case SILFunctionType::Representation::Method:
   case SILFunctionType::Representation::ObjCMethod:
   case SILFunctionType::Representation::CFunctionPointer:
+  case SILFunctionType::Representation::Closure:
     return ThinFuncTypeInfo::create(CanSILFunctionType(T),
                                     IGM.FunctionPtrTy,
                                     IGM.getPointerSize(),
@@ -612,6 +613,7 @@ getFuncSignatureInfoForLowered(IRGenModule &IGM, CanSILFunctionType type) {
   case SILFunctionType::Representation::Method:
   case SILFunctionType::Representation::WitnessMethod:
   case SILFunctionType::Representation::ObjCMethod:
+  case SILFunctionType::Representation::Closure:
     return ti.as<ThinFuncTypeInfo>();
   case SILFunctionType::Representation::Thick:
     return ti.as<FuncTypeInfo>();
@@ -841,6 +843,13 @@ static llvm::Function *emitPartialApplicationForwarder(IRGenModule &IGM,
       (origType->hasSelfParam() &&
        isSelfContextParameter(origType->getSelfParameter()));
 
+  // Witness method calls expect self, followed by the self type followed by,
+  // the witness table at the end of the parameter list. But polymorphic
+  // arguments come before this.
+  bool isWitnessMethodCallee = origType->getRepresentation() ==
+      SILFunctionTypeRepresentation::WitnessMethod;
+  Explosion witnessMethodSelfValue;
+
   // If there's a data pointer required, but it's a swift-retainable
   // value being passed as the context, just forward it down.
   if (!layout) {
@@ -895,13 +904,20 @@ static llvm::Function *emitPartialApplicationForwarder(IRGenModule &IGM,
 
     llvm::Value *argValue;
     if (isIndirectParameter(argConvention)) {
-      expectedArgTy = expectedArgTy->getPointerElementType();
-      auto temporary = subIGF.createAlloca(expectedArgTy,
+      // We can use rawData's type for the alloca because it is a swift
+      // retainable value. Defensively, give it that type. We can't use the
+      // expectedArgType because it might be a generic parameter and therefore
+      // have opaque storage.
+      auto RetainableValue = rawData;
+      if (RetainableValue->getType() != subIGF.IGM.RefCountedPtrTy)
+        RetainableValue = subIGF.Builder.CreateBitCast(
+            RetainableValue, subIGF.IGM.RefCountedPtrTy);
+      auto temporary = subIGF.createAlloca(RetainableValue->getType(),
                                            subIGF.IGM.getPointerAlignment(),
                                            "partial-apply.context");
-      argValue = subIGF.Builder.CreateBitCast(rawData, expectedArgTy);
-      subIGF.Builder.CreateStore(argValue, temporary);
+      subIGF.Builder.CreateStore(RetainableValue, temporary);
       argValue = temporary.getAddress();
+      argValue = subIGF.Builder.CreateBitCast(argValue, expectedArgTy);
     } else {
       argValue = subIGF.Builder.CreateBitCast(rawData, expectedArgTy);
     }
@@ -909,7 +925,7 @@ static llvm::Function *emitPartialApplicationForwarder(IRGenModule &IGM,
 
   // If there's a data pointer required, grab it and load out the
   // extra, previously-curried parameters.
-  } else if (!layout->isKnownEmpty()) {
+  } else {
     unsigned origParamI = outType->getParameters().size();
     assert(layout->getElements().size() == conventions.size()
            && "conventions don't match context layout");
@@ -986,9 +1002,11 @@ static llvm::Function *emitPartialApplicationForwarder(IRGenModule &IGM,
         emitApplyArgument(subIGF, origParamInfo,
                           substType->getParameters()[origParamI],
                           param, origParam);
-
-        needsAllocas |=
-          addNativeArgument(subIGF, origParam, origParamInfo, args);
+        bool isWitnessMethodCalleeSelf = (isWitnessMethodCallee &&
+            origParamI + 1 == origType->getParameters().size());
+        needsAllocas |= addNativeArgument(
+            subIGF, origParam, origParamInfo,
+            isWitnessMethodCalleeSelf ? witnessMethodSelfValue : args);
         ++origParamI;
       } else {
         args.add(param.claimAll());
@@ -999,7 +1017,7 @@ static llvm::Function *emitPartialApplicationForwarder(IRGenModule &IGM,
     // If the parameters can live independent of the context, release it now
     // so we can tail call. The safety of this assumes that neither this release
     // nor any of the loads can throw.
-    if (consumesContext && !dependsOnContextLifetime)
+    if (consumesContext && !dependsOnContextLifetime && rawData)
       subIGF.emitNativeStrongRelease(rawData);
   }
 
@@ -1036,8 +1054,7 @@ static llvm::Function *emitPartialApplicationForwarder(IRGenModule &IGM,
   // witness table. Metadata for Self is derived inside the partial
   // application thunk and doesn't need to be stored in the outer
   // context.
-  if (origType->getRepresentation() ==
-      SILFunctionTypeRepresentation::WitnessMethod) {
+  if (isWitnessMethodCallee) {
     assert(fnContext->getType() == IGM.Int8PtrTy);
     llvm::Value *wtable = subIGF.Builder.CreateBitCast(
         fnContext, IGM.WitnessTablePtrTy);
@@ -1054,6 +1071,11 @@ static llvm::Function *emitPartialApplicationForwarder(IRGenModule &IGM,
     args.add(llvm::UndefValue::get(IGM.RefCountedPtrTy));
   }
 
+  // Add the witness methods self argument before the error parameter after the
+  // polymorphic arguments.
+  if (isWitnessMethodCallee)
+    witnessMethodSelfValue.transferInto(args, witnessMethodSelfValue.size());
+
   // Pass down the error result.
   if (origType->hasErrorResult()) {
     llvm::Value *errorResultPtr = origParams.claimNext();
@@ -1063,8 +1085,7 @@ static llvm::Function *emitPartialApplicationForwarder(IRGenModule &IGM,
 
   assert(origParams.empty());
 
-  if (origType->getRepresentation() ==
-      SILFunctionTypeRepresentation::WitnessMethod) {
+  if (isWitnessMethodCallee) {
     assert(witnessMetadata.SelfMetadata->getType() == IGM.TypeMetadataPtrTy);
     args.add(witnessMetadata.SelfMetadata);
     assert(witnessMetadata.SelfWitnessTable->getType() == IGM.WitnessTablePtrTy);
@@ -1336,7 +1357,7 @@ void irgen::emitFunctionPartialApplication(IRGenFunction &IGF,
                                                        layout);
 
   llvm::Value *data;
-  if (layout.isKnownEmpty()) {
+  if (args.empty() && layout.isKnownEmpty()) {
     data = IGF.IGM.RefCountedNull;
   } else {
     // Allocate a new object.
@@ -1424,6 +1445,8 @@ static llvm::Function *emitBlockCopyHelper(IRGenModule &IGM,
                                      IGM.getModule());
   func->setAttributes(IGM.constructInitialAttributes());
   IRGenFunction IGF(IGM, func);
+  if (IGM.DebugInfo)
+    IGM.DebugInfo->emitArtificialFunction(IGF, func);
   
   // Copy the captures from the source to the destination.
   Explosion params = IGF.collectParameters();
@@ -1459,6 +1482,8 @@ static llvm::Function *emitBlockDisposeHelper(IRGenModule &IGM,
                                      IGM.getModule());
   func->setAttributes(IGM.constructInitialAttributes());
   IRGenFunction IGF(IGM, func);
+  if (IGM.DebugInfo)
+    IGM.DebugInfo->emitArtificialFunction(IGF, func);
   
   // Destroy the captures.
   Explosion params = IGF.collectParameters();
@@ -1485,9 +1510,13 @@ void irgen::emitBlockHeader(IRGenFunction &IGF,
   
   //
   // Initialize the "isa" pointer, which is _NSConcreteStackBlock.
-  auto NSConcreteStackBlock
-    = IGF.IGM.getModule()->getOrInsertGlobal("_NSConcreteStackBlock",
+  auto NSConcreteStackBlock =
+      IGF.IGM.getModule()->getOrInsertGlobal("_NSConcreteStackBlock",
                                              IGF.IGM.ObjCClassStructTy);
+  if (IGF.IGM.Triple.isOSBinFormatCOFF())
+    cast<llvm::GlobalVariable>(NSConcreteStackBlock)
+        ->setDLLStorageClass(llvm::GlobalValue::DLLImportStorageClass);
+
   //
   // Set the flags.
   // - HAS_COPY_DISPOSE unless the capture type is POD

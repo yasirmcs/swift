@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -24,7 +24,7 @@ public struct Arguments {
   }
 }
 
-/// Using Process.arguments, returns an Arguments struct describing
+/// Using CommandLine.arguments, returns an Arguments struct describing
 /// the arguments to this program. If we fail to parse arguments, we
 /// return nil.
 ///
@@ -37,13 +37,13 @@ public struct Arguments {
 /// other option passed in is assumed to be a positional argument.
 public func parseArgs(_ validOptions: [String]? = nil)
   -> Arguments? {
-  let progName = Process.arguments[0]
+  let progName = CommandLine.arguments[0]
   var positionalArgs = [String]()
   var optionalArgsMap = [String : String]()
 
   // For each argument we are passed...
   var passThroughArgs = false
-  for arg in Process.arguments[1..<Process.arguments.count] {
+  for arg in CommandLine.arguments[1..<CommandLine.arguments.count] {
     // If the argument doesn't match the optional argument pattern. Add
     // it to the positional argument list and continue...
     if passThroughArgs || !arg.characters.starts(with: "-".characters) {

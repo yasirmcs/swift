@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -63,7 +63,21 @@ typedef enum swift_layout_kind {
   // Value types consisting of zero or more fields.
   SWIFT_TUPLE,
   SWIFT_STRUCT,
+
+  // An enum with no payload cases. The record will have no fields, but
+  // will have the correct size.
+  SWIFT_NO_PAYLOAD_ENUM,
+
+  // An enum with a single payload case. The record consists of a single
+  // field, being the enum payload.
+  SWIFT_SINGLE_PAYLOAD_ENUM,
+
+  // An enum with multiple payload cases. The record consists of a multiple
+  // fields, one for each enum payload.
+  SWIFT_MULTI_PAYLOAD_ENUM,
+
   SWIFT_THICK_FUNCTION,
+
   SWIFT_OPAQUE_EXISTENTIAL,
   SWIFT_CLASS_EXISTENTIAL,
   SWIFT_ERROR_EXISTENTIAL,

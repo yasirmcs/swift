@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -474,7 +474,7 @@ static bool isValidIdentifierContinuationCodePoint(uint32_t c) {
 static bool isValidIdentifierStartCodePoint(uint32_t c) {
   if (!isValidIdentifierContinuationCodePoint(c))
     return false;
-  if (c < 0x80 && (isDigit(c) || c == '$'))
+  if (c < 0x80 && isDigit(c))
     return false;
 
   // N1518: Recommendations for extended identifier characters for C and C++
@@ -697,6 +697,17 @@ void Lexer::lexOperatorIdentifier() {
       break;
   } while (advanceIfValidContinuationOfOperator(CurPtr, BufferEnd));
 
+  if (CurPtr-TokStart > 2) {
+    // If there is a "//" or "/*" in the middle of an identifier token, 
+    // it starts a comment.
+    for (auto Ptr = TokStart+1; Ptr != CurPtr-1; ++Ptr) {
+      if (Ptr[0] == '/' && (Ptr[1] == '/' || Ptr[1] == '*')) {
+        CurPtr = Ptr;
+        break;
+      }
+    }
+  }
+
   // Decide between the binary, prefix, and postfix cases.
   // It's binary if either both sides are bound or both sides are not bound.
   // Otherwise, it's postfix if left-bound and prefix if right-bound.
@@ -755,8 +766,7 @@ void Lexer::lexOperatorIdentifier() {
 
       // Otherwise, it is probably a missing member.
       diagnose(TokStart, diag::expected_member_name);
-      //return formToken(tok::unknown, TokStart);
-      return lexImpl();
+      return formToken(tok::unknown, TokStart);
     }
     case '?':
       if (leftBound)
@@ -772,27 +782,9 @@ void Lexer::lexOperatorIdentifier() {
       return formToken(tok::unknown, TokStart);
     }
   } else {
-    // If there is a "//" in the middle of an identifier token, it starts
-    // a single-line comment.
-    auto Pos = StringRef(TokStart, CurPtr-TokStart).find("//");
-    if (Pos != StringRef::npos) {
-      CurPtr = TokStart+Pos;
-      // Next token is a comment, which counts as whitespace.
-      rightBound = false;
-    }
-
-    // If there is a "/*" in the middle of an identifier token, it starts
-    // a multi-line comment.
-    Pos = StringRef(TokStart, CurPtr-TokStart).find("/*");
-    if (Pos != StringRef::npos) {
-      CurPtr = TokStart+Pos;
-      // Next token is a comment, which counts as whitespace.
-      rightBound = false;
-    }
-
     // Verify there is no "*/" in the middle of the identifier token, we reject
     // it as potentially ending a block comment.
-    Pos = StringRef(TokStart, CurPtr-TokStart).find("*/");
+    auto Pos = StringRef(TokStart, CurPtr-TokStart).find("*/");
     if (Pos != StringRef::npos) {
       diagnose(TokStart+Pos, diag::lex_unexpected_block_comment_end);
       return formToken(tok::unknown, TokStart);
@@ -806,7 +798,7 @@ void Lexer::lexOperatorIdentifier() {
   return formToken(leftBound ? tok::oper_postfix : tok::oper_prefix, TokStart);
 }
 
-/// lexDollarIdent - Match $[0-9a-zA-Z_$]*
+/// lexDollarIdent - Match $[0-9a-zA-Z_$]+
 void Lexer::lexDollarIdent() {
   const char *tokStart = CurPtr-1;
   assert(*tokStart == '$');
@@ -827,10 +819,20 @@ void Lexer::lexDollarIdent() {
     }
   }
 
-  // It's always an error to see a standalone $, and we reserve
-  // $nonNumeric for persistent bindings in the debugger.
-  if (CurPtr == tokStart + 1 || !isAllDigits) {
-    if (!isAllDigits && !LangOpts.EnableDollarIdentifiers)
+  if (CurPtr == tokStart + 1) {
+    // It is always an error to see a standalone '$' when not in Swift 3
+    // compatibility mode.
+    if (!LangOpts.isSwiftVersion3()) {
+      // Offer to replace '$' with '`$`'.
+      diagnose(tokStart, diag::standalone_dollar_identifier)
+        .fixItReplaceChars(getSourceLoc(tokStart), getSourceLoc(CurPtr), "`$`");
+    }
+    return formToken(tok::identifier, tokStart);
+  }
+
+  // We reserve $nonNumeric for persistent bindings in the debugger.
+  if (!isAllDigits) {
+    if (!LangOpts.EnableDollarIdentifiers)
       diagnose(tokStart, diag::expected_dollar_numeric);
 
     // Even if we diagnose, we go ahead and form an identifier token,
@@ -862,8 +864,11 @@ void Lexer::lexHexNumber() {
   if (*CurPtr != '.' && *CurPtr != 'p' && *CurPtr != 'P')
     return formToken(tok::integer_literal, TokStart);
   
+  const char *PtrOnDot = nullptr;
+
   // (\.[0-9A-Fa-f][0-9A-Fa-f_]*)?
   if (*CurPtr == '.') {
+    PtrOnDot = CurPtr;
     ++CurPtr;
     
     // If the character after the '.' is not a digit, assume we have an int
@@ -876,6 +881,11 @@ void Lexer::lexHexNumber() {
     while (isHexDigit(*CurPtr) || *CurPtr == '_')
       ++CurPtr;
     if (*CurPtr != 'p' && *CurPtr != 'P') {
+      if (!isDigit(PtrOnDot[1])) {
+        // e.g: 0xff.description
+        CurPtr = PtrOnDot;
+        return formToken(tok::integer_literal, TokStart);
+      }
       diagnose(CurPtr, diag::lex_expected_binary_exponent_in_hex_float_literal);
       return formToken(tok::unknown, TokStart);
     }
@@ -885,10 +895,19 @@ void Lexer::lexHexNumber() {
   assert(*CurPtr == 'p' || *CurPtr == 'P' && "not at a hex float exponent?!");
   ++CurPtr;
   
-  if (*CurPtr == '+' || *CurPtr == '-')
+  bool signedExponent = false;
+  if (*CurPtr == '+' || *CurPtr == '-') {
     ++CurPtr;  // Eat the sign.
+    signedExponent = true;
+  }
 
   if (!isDigit(*CurPtr)) {
+    if (PtrOnDot && !isDigit(PtrOnDot[1]) && !signedExponent) {
+      // e.g: 0xff.fpValue, 0xff.fp
+      CurPtr = PtrOnDot;
+      return formToken(tok::integer_literal, TokStart);
+    }
+    // Note: 0xff.fp+otherExpr can be valid expression. But we don't accept it.
     diagnose(CurPtr, diag::lex_expected_digit_in_fp_exponent);
     return formToken(tok::unknown, TokStart);
   }
@@ -1880,6 +1899,15 @@ static const char *findStartOfLine(const char *bufStart, const char *current) {
   }
 
   return current;
+}
+
+SourceLoc Lexer::getLocForStartOfToken(SourceManager &SM, SourceLoc Loc) {
+  Optional<unsigned> BufferIdOp = SM.getIDForBufferIdentifier(SM.
+    getBufferIdentifierForLoc(Loc));
+  if (!BufferIdOp.hasValue())
+    return SourceLoc();
+  return getLocForStartOfToken(SM, BufferIdOp.getValue(),
+    SM.getLocOffsetInBuffer(Loc, BufferIdOp.getValue()));
 }
 
 SourceLoc Lexer::getLocForStartOfToken(SourceManager &SM, unsigned BufferID,

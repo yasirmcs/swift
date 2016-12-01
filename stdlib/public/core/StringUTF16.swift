@@ -5,12 +5,12 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
-// FIXME(ABI): The UTF-16 string view should have a custom iterator type to
+// FIXME(ABI)#71 : The UTF-16 string view should have a custom iterator type to
 // allow performance optimizations of linear traversals.
 
 extension String {
@@ -131,7 +131,7 @@ extension String {
     ///     }
     ///     // Prints "[32, 60, 51, 32, 9829, 65038, 32, 55357, 56472]"
     ///     // Prints " <3 ♥︎ 💘"
-    public struct Index : Comparable {
+    public struct Index {
       // Foundation needs access to these fields so it can expose
       // random access
       public // SPI(Foundation)
@@ -145,7 +145,7 @@ extension String {
     /// The position of the first code unit if the `String` is
     /// nonempty; identical to `endIndex` otherwise.
     public var startIndex: Index {
-      return Index(_offset: 0)
+      return Index(_offset: _offset)
     }
 
     /// The "past the end" position---that is, the position one greater than
@@ -153,7 +153,7 @@ extension String {
     ///
     /// In an empty UTF-16 view, `endIndex` is equal to `startIndex`.
     public var endIndex: Index {
-      return Index(_offset: _length)
+      return Index(_offset: _offset + _length)
     }
 
     public struct Indices {
@@ -204,7 +204,7 @@ extension String {
     }
 
     func _internalIndex(at i: Int) -> Int {
-      return _core.startIndex + _offset + i
+      return _core.startIndex + i
     }
 
     /// Accesses the code unit at the given position.
@@ -220,11 +220,10 @@ extension String {
     /// - Parameter position: A valid index of the view. `position` must be
     ///   less than the view's end index.
     public subscript(i: Index) -> UTF16.CodeUnit {
-      let position = i._offset
-      _precondition(position >= 0 && position < _length,
+      _precondition(i >= startIndex && i < endIndex,
           "out-of-range access on a UTF16View")
 
-      let index = _internalIndex(at: position)
+      let index = _internalIndex(at: i._offset)
       let u = _core[index]
       if _fastPath((u >> 11) != 0b1101_1) {
         // Neither high-surrogate, nor low-surrogate -- well-formed sequence
@@ -282,9 +281,7 @@ extension String {
     }
 
     internal init(_ _core: _StringCore) {
-      self._offset = 0
-      self._length = _core.count
-      self._core = _core
+      self.init(_core, offset: 0, length: _core.count)
     }
 
     internal init(_ _core: _StringCore, offset: Int, length: Int) {
@@ -294,8 +291,8 @@ extension String {
     }
 
     public var description: String {
-      let start = _internalIndex(at: 0)
-      let end = _internalIndex(at: _length)
+      let start = _internalIndex(at: _offset)
+      let end = _internalIndex(at: _offset + _length)
       return String(_core[start..<end])
     }
 
@@ -314,11 +311,11 @@ extension String {
       return UTF16View(_core)
     }
     set {
-      self = String(newValue)
+      self = String(describing: newValue)
     }
   }
 
-  /// Creates a string corresponding to the given sequence of UTF-8 code units.
+  /// Creates a string corresponding to the given sequence of UTF-16 code units.
   ///
   /// If `utf16` contains unpaired UTF-16 surrogates, the result is `nil`.
   ///
@@ -339,35 +336,38 @@ extension String {
   public init?(_ utf16: UTF16View) {
     let wholeString = String(utf16._core)
 
-    if let start = UTF16Index(
-      _offset: utf16._offset
-    ).samePosition(in: wholeString) {
-      if let end = UTF16Index(
-        _offset: utf16._offset + utf16._length
-      ).samePosition(in: wholeString) {
-        self = wholeString[start..<end]
-        return
-      }
+    guard
+      let start = UTF16Index(_offset: utf16._offset)
+        .samePosition(in: wholeString),
+      let end = UTF16Index(_offset: utf16._offset + utf16._length)
+        .samePosition(in: wholeString)
+      else
+    {
+        return nil
     }
-    return nil
+    self = wholeString[start..<end]
   }
 
   /// The index type for subscripting a string's `utf16` view.
   public typealias UTF16Index = UTF16View.Index
 }
 
-// FIXME: swift-3-indexing-model: add complete set of forwards for Comparable 
-//        assuming String.UTF8View.Index continues to exist
-public func == (
-  lhs: String.UTF16View.Index, rhs: String.UTF16View.Index
-) -> Bool {
-  return lhs._offset == rhs._offset
-}
+extension String.UTF16View.Index : Comparable {
+  // FIXME: swift-3-indexing-model: add complete set of forwards for Comparable 
+  //        assuming String.UTF8View.Index continues to exist
+  public static func == (
+    lhs: String.UTF16View.Index,
+    rhs: String.UTF16View.Index
+  ) -> Bool {
+    return lhs._offset == rhs._offset
+  }
 
-public func < (
-  lhs: String.UTF16View.Index, rhs: String.UTF16View.Index
-) -> Bool {
-  return lhs._offset < rhs._offset
+  public static func < (
+    lhs: String.UTF16View.Index,
+    rhs: String.UTF16View.Index
+  ) -> Bool {
+    return lhs._offset < rhs._offset
+  }
 }
 
 // Index conversions
@@ -407,7 +407,7 @@ extension String.UTF16View.Index {
       "Invalid String.UTF8Index for this UTF-16 view")
 
     // Detect positions that have no corresponding index.
-    if !utf8Index._isOnUnicodeScalarBoundary {
+    if !utf8Index._isOnUnicodeScalarBoundary(in: core) {
       return nil
     }
     _offset = utf8Index._coreIndex

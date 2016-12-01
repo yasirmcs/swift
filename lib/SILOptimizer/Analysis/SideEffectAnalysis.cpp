@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -66,16 +66,22 @@ bool FunctionEffects::mergeFrom(const FunctionEffects &RHS) {
 
 bool FunctionEffects::mergeFromApply(
                   const FunctionEffects &ApplyEffects, FullApplySite FAS) {
+  return mergeFromApply(ApplyEffects, FAS.getInstruction());
+}
+
+bool FunctionEffects::mergeFromApply(
+                  const FunctionEffects &ApplyEffects, SILInstruction *AS) {
   bool Changed = mergeFlags(ApplyEffects);
   Changed |= GlobalEffects.mergeFrom(ApplyEffects.GlobalEffects);
-  unsigned numCallerArgs = FAS.getNumArguments();
+  auto FAS = FullApplySite::isa(AS);
+  unsigned numCallerArgs = FAS ? FAS.getNumArguments() : 1;
   unsigned numCalleeArgs = ApplyEffects.ParamEffects.size();
   assert(numCalleeArgs >= numCallerArgs);
   for (unsigned Idx = 0; Idx < numCalleeArgs; Idx++) {
     // Map the callee argument effects to parameters of this function.
     // If there are more callee parameters than arguments it means that the
     // callee is the result of a partial_apply.
-    Effects *E = (Idx < numCallerArgs ? getEffectsOn(FAS.getArgument(Idx)) :
+    Effects *E = (Idx < numCallerArgs ? getEffectsOn(FAS ? FAS.getArgument(Idx) : AS->getOperand(Idx)) :
                   &GlobalEffects);
     Changed |= E->mergeFrom(ApplyEffects.ParamEffects[Idx]);
   }
@@ -94,6 +100,7 @@ static SILValue skipAddrProjections(SILValue V) {
       case ValueKind::StructElementAddrInst:
       case ValueKind::TupleElementAddrInst:
       case ValueKind::RefElementAddrInst:
+      case ValueKind::RefTailAddrInst:
       case ValueKind::ProjectBoxInst:
       case ValueKind::UncheckedTakeEnumDataAddrInst:
       case ValueKind::PointerToAddressInst:
@@ -148,7 +155,7 @@ Effects *FunctionEffects::getEffectsOn(SILValue Addr) {
 
 bool SideEffectAnalysis::getDefinedEffects(FunctionEffects &Effects,
                                            SILFunction *F) {
-  if (F->getLoweredFunctionType()->isNoReturn()) {
+  if (F->hasSemanticsAttr("arc.programtermination_point")) {
     Effects.Traps = true;
     return true;
   }
@@ -365,15 +372,24 @@ void SideEffectAnalysis::analyzeInstruction(FunctionInfo *FInfo,
       return;
     }
     case ValueKind::BuiltinInst: {
-      auto &BI = cast<BuiltinInst>(I)->getBuiltinInfo();
+      auto *BInst = cast<BuiltinInst>(I);
+      auto &BI = BInst->getBuiltinInfo();
       switch (BI.ID) {
         case BuiltinValueKind::IsUnique:
           // TODO: derive this information in a more general way, e.g. add it
           // to Builtins.def
           FInfo->FE.ReadsRC = true;
           break;
+        case BuiltinValueKind::CondUnreachable:
+          FInfo->FE.Traps = true;
+          return;
         default:
           break;
+      }
+      const IntrinsicInfo &IInfo = BInst->getIntrinsicInfo();
+      if (IInfo.ID == llvm::Intrinsic::trap) {
+        FInfo->FE.Traps = true;
+        return;
       }
       // Detailed memory effects of builtins are handled below by checking the
       // memory behavior of the instruction.

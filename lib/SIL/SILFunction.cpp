@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -16,8 +16,8 @@
 #include "swift/SIL/SILInstruction.h"
 #include "swift/SIL/SILArgument.h"
 #include "swift/SIL/CFG.h"
-// FIXME: For mapTypeInContext
 #include "swift/AST/ArchetypeBuilder.h"
+#include "swift/AST/GenericEnvironment.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/GraphWriter.h"
@@ -41,7 +41,7 @@ SILSpecializeAttr *SILSpecializeAttr::create(SILModule &M,
 SILFunction *SILFunction::create(SILModule &M, SILLinkage linkage,
                                  StringRef name,
                                  CanSILFunctionType loweredType,
-                                 GenericParamList *contextGenericParams,
+                                 GenericEnvironment *genericEnv,
                                  Optional<SILLocation> loc,
                                  IsBare_t isBareSILFunction,
                                  IsTransparent_t isTrans,
@@ -62,7 +62,7 @@ SILFunction *SILFunction::create(SILModule &M, SILLinkage linkage,
   }
 
   auto fn = new (M) SILFunction(M, linkage, name,
-                                loweredType, contextGenericParams, loc,
+                                loweredType, genericEnv, loc,
                                 isBareSILFunction, isTrans, isFragile, isThunk,
                                 classVisibility, inlineStrategy, E,
                                 insertBefore, debugScope, DC);
@@ -71,37 +71,21 @@ SILFunction *SILFunction::create(SILModule &M, SILLinkage linkage,
   return fn;
 }
 
-SILFunction::SILFunction(SILModule &Module, SILLinkage Linkage,
-                         StringRef Name, CanSILFunctionType LoweredType,
-                         GenericParamList *contextGenericParams,
-                         Optional<SILLocation> Loc,
-                         IsBare_t isBareSILFunction,
-                         IsTransparent_t isTrans,
-                         IsFragile_t isFragile,
-                         IsThunk_t isThunk,
-                         ClassVisibility_t classVisibility,
+SILFunction::SILFunction(SILModule &Module, SILLinkage Linkage, StringRef Name,
+                         CanSILFunctionType LoweredType,
+                         GenericEnvironment *genericEnv,
+                         Optional<SILLocation> Loc, IsBare_t isBareSILFunction,
+                         IsTransparent_t isTrans, IsFragile_t isFragile,
+                         IsThunk_t isThunk, ClassVisibility_t classVisibility,
                          Inline_t inlineStrategy, EffectsKind E,
                          SILFunction *InsertBefore,
-                         const SILDebugScope *DebugScope,
-                         DeclContext *DC)
-  : Module(Module),
-    Name(Name),
-    LoweredType(LoweredType),
-    // FIXME: Context params should be independent of the function type.
-    ContextGenericParams(contextGenericParams),
-    Location(Loc),
-    DeclCtx(DC),
-    DebugScope(DebugScope),
-    Bare(isBareSILFunction),
-    Transparent(isTrans),
-    Fragile(isFragile),
-    Thunk(isThunk),
-    ClassVisibility(classVisibility),
-    GlobalInitFlag(false),
-    InlineStrategy(inlineStrategy),
-    Linkage(unsigned(Linkage)),
-    KeepAsPublic(false),
-    EffectsKindAttr(E) {
+                         const SILDebugScope *DebugScope, DeclContext *DC)
+    : Module(Module), Name(Name), LoweredType(LoweredType),
+      GenericEnv(genericEnv), DeclCtx(DC), DebugScope(DebugScope),
+      Bare(isBareSILFunction), Transparent(isTrans), Fragile(isFragile),
+      Thunk(isThunk), ClassVisibility(classVisibility), GlobalInitFlag(false),
+      InlineStrategy(inlineStrategy), Linkage(unsigned(Linkage)),
+      KeepAsPublic(false), EffectsKindAttr(E) {
   if (InsertBefore)
     Module.functions.insert(SILModule::iterator(InsertBefore), this);
   else
@@ -168,7 +152,7 @@ void SILFunction::numberValues(llvm::DenseMap<const ValueBase*,
                                unsigned> &ValueToNumberMap) const {
   unsigned idx = 0;
   for (auto &BB : *this) {
-    for (auto I = BB.bbarg_begin(), E = BB.bbarg_end(); I != E; ++I)
+    for (auto I = BB.args_begin(), E = BB.args_end(); I != E; ++I)
       ValueToNumberMap[*I] = idx++;
     
     for (auto &I : BB)
@@ -189,7 +173,7 @@ bool SILFunction::shouldOptimize() const {
 
 Type SILFunction::mapTypeIntoContext(Type type) const {
   return ArchetypeBuilder::mapTypeIntoContext(getModule().getSwiftModule(),
-                                              getContextGenericParams(),
+                                              getGenericEnvironment(),
                                               type);
 }
 
@@ -213,7 +197,7 @@ struct SubstDependentSILType
     // its context substitution against the associated type's abstraction
     // pattern.
     CanType astTy = Subst(t);
-    AbstractionPattern origTy(t->getAssocType()->getArchetype());
+    auto origTy = AbstractionPattern::getOpaque();
     
     return M.Types.getLoweredType(origTy, astTy)
       .getSwiftRValueType();
@@ -283,20 +267,32 @@ SILType SILFunction::mapTypeIntoContext(SILType type) const {
     type);
 }
 
-SILType ArchetypeBuilder::substDependentType(SILModule &M, SILType type) {
+SILType GenericEnvironment::mapTypeIntoContext(SILModule &M,
+                                               SILType type) const {
   return doSubstDependentSILType(M,
-    [&](CanType t) { return substDependentType(t)->getCanonicalType(); },
+    [&](CanType t) {
+      return mapTypeIntoContext(M.getSwiftModule(), t)->getCanonicalType();
+    },
     type);
 }
 
 Type SILFunction::mapTypeOutOfContext(Type type) const {
   return ArchetypeBuilder::mapTypeOutOfContext(getModule().getSwiftModule(),
-                                               getContextGenericParams(),
+                                               getGenericEnvironment(),
                                                type);
+}
+
+bool SILFunction::isNoReturnFunction() const {
+  return SILType::getPrimitiveObjectType(getLoweredFunctionType())
+      .isNoReturnFunction();
 }
 
 SILBasicBlock *SILFunction::createBasicBlock() {
   return new (getModule()) SILBasicBlock(this);
+}
+
+SILBasicBlock *SILFunction::createBasicBlock(SILBasicBlock *AfterBlock) {
+  return new (getModule()) SILBasicBlock(this, AfterBlock);
 }
 
 //===----------------------------------------------------------------------===//
@@ -551,8 +547,15 @@ void SILFunction::convertToDeclaration() {
 }
 
 ArrayRef<Substitution> SILFunction::getForwardingSubstitutions() {
-  auto *params = getContextGenericParams();
-  if (!params)
+  if (ForwardingSubs)
+    return *ForwardingSubs;
+
+  auto *env = getGenericEnvironment();
+  if (!env)
     return {};
-  return params->getForwardingSubstitutions(getASTContext());
+
+  auto *M = getModule().getSwiftModule();
+  ForwardingSubs = env->getForwardingSubstitutions(M);
+
+  return *ForwardingSubs;
 }

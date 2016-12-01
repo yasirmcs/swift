@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -33,9 +33,9 @@ public struct _stdlib_ShardedAtomicCounter {
   public init() {
     let hardwareConcurrency = _stdlib_getHardwareConcurrency()
     let count = max(8, hardwareConcurrency * hardwareConcurrency)
-    let shards = UnsafeMutablePointer<Int>(allocatingCapacity: count)
+    let shards = UnsafeMutablePointer<Int>.allocate(capacity: count)
     for i in 0..<count {
-      (shards + i).initialize(with: 0)
+      (shards + i).initialize(to: 0)
     }
     self._shardsPtr = shards
     self._shardsCount = count
@@ -43,7 +43,7 @@ public struct _stdlib_ShardedAtomicCounter {
 
   public func `deinit`() {
     self._shardsPtr.deinitialize(count: self._shardsCount)
-    self._shardsPtr.deallocateCapacity(self._shardsCount)
+    self._shardsPtr.deallocate(capacity: self._shardsCount)
   }
 
   public func add(_ operand: Int, randomInt: Int) {

@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -82,7 +82,7 @@ bool SourceManager::openVirtualFile(SourceLoc loc, StringRef name,
 
   CharSourceRange range = CharSourceRange(*this, loc, end);
   VirtualFiles[end.Value.getPointer()] = { range, name, lineOffset };
-  CachedVFile = {};
+  CachedVFile = {nullptr, nullptr};
   return true;
 }
 
@@ -99,7 +99,7 @@ void SourceManager::closeVirtualFile(SourceLoc end) {
 #endif
     return;
   }
-  CachedVFile = {};
+  CachedVFile = {nullptr, nullptr};
 
   CharSourceRange oldRange = virtualFile->Range;
   virtualFile->Range = CharSourceRange(*this, virtualFile->Range.getStart(),

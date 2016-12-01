@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -84,11 +84,15 @@ template<typename Fn>
 static void withValueInPayload(IRGenFunction &IGF,
                                const EnumPayload &payload,
                                llvm::Type *valueType,
+                               int numBitsUsedInValue,
                                unsigned payloadOffset,
                                Fn &&f) {
   auto &DataLayout = IGF.IGM.DataLayout;
-  int valueBitWidth = DataLayout.getTypeSizeInBits(valueType);
-  
+  int valueTypeBitWidth = DataLayout.getTypeSizeInBits(valueType);
+  int valueBitWidth =
+      numBitsUsedInValue < 0 ? valueTypeBitWidth : numBitsUsedInValue;
+  assert(numBitsUsedInValue <= valueTypeBitWidth);
+
   // Find the elements we need to touch.
   // TODO: Linear search through the payload elements is lame.
   MutableArrayRef<EnumPayload::LazyValue> payloads = payload.PayloadValues;
@@ -107,7 +111,7 @@ static void withValueInPayload(IRGenFunction &IGF,
     
       f(payloads.front(),
         payloadBitWidth, payloadValueOffset,
-        valueBitWidth, valueOffset);
+        valueTypeBitWidth, valueOffset);
       
       // If we used the entire value, we're done.
       valueOffset += valueChunkWidth;
@@ -121,8 +125,9 @@ static void withValueInPayload(IRGenFunction &IGF,
 }
 
 void EnumPayload::insertValue(IRGenFunction &IGF, llvm::Value *value,
-                              unsigned payloadOffset) {
-  withValueInPayload(IGF, *this, value->getType(), payloadOffset,
+                              unsigned payloadOffset,
+                              int numBitsUsedInValue) {
+  withValueInPayload(IGF, *this, value->getType(), numBitsUsedInValue, payloadOffset,
     [&](LazyValue &payloadValue,
         unsigned payloadBitWidth,
         unsigned payloadValueOffset,
@@ -182,7 +187,7 @@ void EnumPayload::insertValue(IRGenFunction &IGF, llvm::Value *value,
 llvm::Value *EnumPayload::extractValue(IRGenFunction &IGF, llvm::Type *type,
                                        unsigned payloadOffset) const {
   llvm::Value *result = nullptr;
-  withValueInPayload(IGF, *this, type, payloadOffset,
+  withValueInPayload(IGF, *this, type, -1, payloadOffset,
     [&](LazyValue &payloadValue,
         unsigned payloadBitWidth,
         unsigned payloadValueOffset,
@@ -666,6 +671,69 @@ EnumPayload::emitApplyOrMask(IRGenFunction &IGF,
     }
   }
 }
+
+/// Gather spare bits into the low bits of a smaller integer value.
+llvm::Value *irgen::emitGatherSpareBits(IRGenFunction &IGF,
+                                        const SpareBitVector &spareBitMask,
+                                        llvm::Value *spareBits,
+                                        unsigned resultLowBit,
+                                        unsigned resultBitWidth) {
+  auto destTy
+    = llvm::IntegerType::get(IGF.IGM.getLLVMContext(), resultBitWidth);
+  unsigned usedBits = resultLowBit;
+  llvm::Value *result = nullptr;
+
+  auto spareBitEnumeration = spareBitMask.enumerateSetBits();
+  for (auto optSpareBit = spareBitEnumeration.findNext();
+       optSpareBit.hasValue() && usedBits < resultBitWidth;
+       optSpareBit = spareBitEnumeration.findNext()) {
+    unsigned u = optSpareBit.getValue();
+    assert(u >= (usedBits - resultLowBit) &&
+           "used more bits than we've processed?!");
+
+    // Shift the bits into place.
+    llvm::Value *newBits;
+    if (u > usedBits)
+      newBits = IGF.Builder.CreateLShr(spareBits, u - usedBits);
+    else if (u < usedBits)
+      newBits = IGF.Builder.CreateShl(spareBits, usedBits - u);
+    else
+      newBits = spareBits;
+    newBits = IGF.Builder.CreateZExtOrTrunc(newBits, destTy);
+
+    // See how many consecutive bits we have.
+    unsigned numBits = 1;
+    ++u;
+    // We don't need more bits than the size of the result.
+    unsigned maxBits = resultBitWidth - usedBits;
+    for (unsigned e = spareBitMask.size();
+         u < e && numBits < maxBits && spareBitMask[u];
+         ++u) {
+      ++numBits;
+      (void) spareBitEnumeration.findNext();
+    }
+
+    // Mask out the selected bits.
+    auto val = APInt::getAllOnesValue(numBits);
+    if (numBits < resultBitWidth)
+      val = val.zext(resultBitWidth);
+    val = val.shl(usedBits);
+    auto *mask = llvm::ConstantInt::get(IGF.IGM.getLLVMContext(), val);
+    newBits = IGF.Builder.CreateAnd(newBits, mask);
+
+    // Accumulate the result.
+    if (result)
+      result = IGF.Builder.CreateOr(result, newBits);
+    else
+      result = newBits;
+
+    usedBits += numBits;
+  }
+
+  return result;
+}
+
+
 
 llvm::Value *
 EnumPayload::emitGatherSpareBits(IRGenFunction &IGF,

@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -44,9 +44,8 @@ struct MirrorReturn {
 
 /// func reflect<T>(x: T) -> Mirror
 ///
-/// Produce a mirror for any value. If the value's type conforms to _Reflectable,
-/// invoke its _getMirror() method; otherwise, fall back to an implementation
-/// in the runtime that structurally reflects values of any type.
+/// Produce a mirror for any value.  The runtime produces a mirror that
+/// structurally reflects values of any type.
 SWIFT_RUNTIME_EXPORT
 extern "C" MirrorReturn
 swift_reflectAny(OpaqueValue *value, const Metadata *T);

@@ -5,8 +5,8 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -18,7 +18,6 @@
 #include "swift/AST/ParameterList.h"
 #include "swift/AST/ASTContext.h"
 #include "swift/AST/Expr.h"
-#include "swift/AST/ExprHandle.h"
 using namespace swift;
 
 /// TODO: unique and reuse the () parameter list in ASTContext, it is common to
@@ -91,6 +90,8 @@ ParameterList *ParameterList::clone(const ASTContext &C,
 
   // Remap the ParamDecls inside of the ParameterList.
   for (auto &decl : params) {
+    bool hadDefaultArgument =decl->getDefaultValue() != nullptr;
+
     decl = new (C) ParamDecl(decl);
     if (options & Implicit)
       decl->setImplicit();
@@ -102,9 +103,8 @@ ParameterList *ParameterList::clone(const ASTContext &C,
       decl->setName(C.getIdentifier("argument"));
     
     // If we're inheriting a default argument, mark it as such.
-    if (decl->isDefaultArgument() && (options & Inherited)) {
+    if (hadDefaultArgument && (options & Inherited)) {
       decl->setDefaultArgumentKind(DefaultArgumentKind::Inherited);
-      decl->setDefaultValue(nullptr);
     }
   }
   
@@ -121,13 +121,44 @@ Type ParameterList::getType(const ASTContext &C) const {
   
   for (auto P : *this) {
     if (!P->hasType()) return Type();
-    
-    argumentInfo.push_back({
-      P->getType(), P->getArgumentName(),
-      P->getDefaultArgumentKind(), P->isVariadic()
-    });
+
+    argumentInfo.emplace_back(
+        P->getType(), P->getArgumentName(),
+        ParameterTypeFlags::fromParameterType(P->getType(), P->isVariadic()));
   }
-  
+
+  return TupleType::get(argumentInfo, C);
+}
+
+/// Hack to deal with the fact that Sema/CodeSynthesis.cpp creates ParamDecls
+/// containing contextual types.
+Type ParameterList::getInterfaceType(DeclContext *DC) const {
+  auto &C = DC->getASTContext();
+
+  if (size() == 0)
+    return TupleType::getEmpty(C);
+
+  SmallVector<TupleTypeElt, 8> argumentInfo;
+
+  for (auto P : *this) {
+    assert(P->hasType());
+
+    Type type;
+    // FIXME: Awful predicate because hasInterfaceType() now always
+    // returns true on ParamDecls.
+    if (!P->getInterfaceType()->hasArchetype())
+      type = P->getInterfaceType();
+    else if (!P->getTypeLoc().hasLocation())
+      type = ArchetypeBuilder::mapTypeOutOfContext(DC, P->getType());
+    else
+      type = P->getType();
+    assert(!type->hasArchetype());
+
+    argumentInfo.emplace_back(
+        type, P->getArgumentName(),
+        ParameterTypeFlags::fromParameterType(type, P->isVariadic()));
+  }
+
   return TupleType::get(argumentInfo, C);
 }
 
@@ -136,17 +167,17 @@ Type ParameterList::getType(const ASTContext &C) const {
 /// returns the specified result type.  This returns a null type if one of the
 /// ParamDecls does not have a type set for it yet.
 ///
-Type ParameterList::getFullType(Type resultType, ArrayRef<ParameterList*> PLL) {
+Type ParameterList::getFullInterfaceType(Type resultType,
+                                         ArrayRef<ParameterList*> PLL,
+                                         DeclContext *DC) {
   auto result = resultType;
-  auto &C = result->getASTContext();
-  
   for (auto PL : reversed(PLL)) {
-    auto paramType = PL->getType(C);
-    if (!paramType) return Type();
+    auto paramType = PL->getInterfaceType(DC);
     result = FunctionType::get(paramType, result);
   }
   return result;
 }
+
 
 /// Return the full source range of this parameter list.
 SourceRange ParameterList::getSourceRange() const {

@@ -5,18 +5,21 @@
 // Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
 /// Buffer type for `ArraySlice<Element>`.
-public // @testable
-struct _SliceBuffer<Element> : _ArrayBufferProtocol, RandomAccessCollection {
+@_versioned
+internal struct _SliceBuffer<Element>
+  : _ArrayBufferProtocol,
+    RandomAccessCollection
+{
   internal typealias NativeStorage = _ContiguousArrayStorage<Element>
-  public typealias NativeBuffer = _ContiguousArrayBuffer<Element>
+  internal typealias NativeBuffer = _ContiguousArrayBuffer<Element>
 
-  init(
+  internal init(
     owner: AnyObject, subscriptBaseAddress: UnsafeMutablePointer<Element>,
     indices: Range<Int>, hasNativeBuffer: Bool
   ) {
@@ -28,7 +31,7 @@ struct _SliceBuffer<Element> : _ArrayBufferProtocol, RandomAccessCollection {
     _invariantCheck()
   }
 
-  public init() {
+  internal init() {
     let empty = _ContiguousArrayBuffer<Element>()
     self.owner = empty.owner
     self.subscriptBaseAddress = empty.firstElementAddress
@@ -37,7 +40,7 @@ struct _SliceBuffer<Element> : _ArrayBufferProtocol, RandomAccessCollection {
     _invariantCheck()
   }
 
-  public init(_ buffer: NativeBuffer, shiftedToStartIndex: Int) {
+  internal init(_buffer buffer: NativeBuffer, shiftedToStartIndex: Int) {
     let shift = buffer.startIndex - shiftedToStartIndex
     self.init(
       owner: buffer.owner,
@@ -46,26 +49,26 @@ struct _SliceBuffer<Element> : _ArrayBufferProtocol, RandomAccessCollection {
       hasNativeBuffer: true)
   }
 
-  func _invariantCheck() {
+  internal func _invariantCheck() {
     let isNative = _hasNativeBuffer
-    let isNativeStorage: Bool = (owner as? _ContiguousArrayStorageBase) != nil
+    let isNativeStorage: Bool = owner is _ContiguousArrayStorageBase
     _sanityCheck(isNativeStorage == isNative)
     if isNative {
       _sanityCheck(count <= nativeBuffer.count)
     }
   }
 
-  var _hasNativeBuffer: Bool {
+  internal var _hasNativeBuffer: Bool {
     return (endIndexAndFlags & 1) != 0
   }
 
-  var nativeBuffer: NativeBuffer {
+  internal var nativeBuffer: NativeBuffer {
     _sanityCheck(_hasNativeBuffer)
     return NativeBuffer(
       owner as? _ContiguousArrayStorageBase ?? _emptyArrayStorage)
   }
 
-  public var nativeOwner: AnyObject {
+  internal var nativeOwner: AnyObject {
     _sanityCheck(_hasNativeBuffer, "Expect a native array")
     return owner
   }
@@ -76,8 +79,8 @@ struct _SliceBuffer<Element> : _ArrayBufferProtocol, RandomAccessCollection {
   /// - Precondition: This buffer is backed by a uniquely-referenced
   ///   `_ContiguousArrayBuffer` and
   ///   `insertCount <= numericCast(newValues.count)`.
-  public mutating func replace<C>(
-    subRange: Range<Int>,
+  internal mutating func replaceSubrange<C>(
+    _ subrange: Range<Int>,
     with insertCount: Int,
     elementsOf newValues: C
   ) where C : Collection, C.Iterator.Element == Element {
@@ -87,7 +90,7 @@ struct _SliceBuffer<Element> : _ArrayBufferProtocol, RandomAccessCollection {
 
     _sanityCheck(_hasNativeBuffer && isUniquelyReferenced())
 
-    let eraseCount = subRange.count
+    let eraseCount = subrange.count
     let growth = insertCount - eraseCount
     let oldCount = count
 
@@ -96,10 +99,10 @@ struct _SliceBuffer<Element> : _ArrayBufferProtocol, RandomAccessCollection {
 
     _sanityCheck(native.count + growth <= native.capacity)
 
-    let start = subRange.lowerBound - startIndex + hiddenElementCount
-    let end = subRange.upperBound - startIndex + hiddenElementCount
-    native.replace(
-      subRange: start..<end,
+    let start = subrange.lowerBound - startIndex + hiddenElementCount
+    let end = subrange.upperBound - startIndex + hiddenElementCount
+    native.replaceSubrange(
+      start..<end,
       with: insertCount,
       elementsOf: newValues)
 
@@ -111,28 +114,29 @@ struct _SliceBuffer<Element> : _ArrayBufferProtocol, RandomAccessCollection {
   /// A value that identifies the storage used by the buffer.  Two
   /// buffers address the same elements when they have the same
   /// identity and count.
-  public var identity: UnsafePointer<Void> {
-    return UnsafePointer(firstElementAddress)
+  internal var identity: UnsafeRawPointer {
+    return UnsafeRawPointer(firstElementAddress)
   }
 
   /// An object that keeps the elements stored in this buffer alive.
-  public var owner: AnyObject
-  public let subscriptBaseAddress: UnsafeMutablePointer<Element>
+  internal var owner: AnyObject
+  internal let subscriptBaseAddress: UnsafeMutablePointer<Element>
 
-  public var firstElementAddress: UnsafeMutablePointer<Element> {
+  @_versioned
+  internal var firstElementAddress: UnsafeMutablePointer<Element> {
     return subscriptBaseAddress + startIndex
   }
 
-  public var firstElementAddressIfContiguous: UnsafeMutablePointer<Element>? {
+  internal var firstElementAddressIfContiguous: UnsafeMutablePointer<Element>? {
     return firstElementAddress
   }
 
   /// [63:1: 63-bit index][0: has a native buffer]
-  var endIndexAndFlags: UInt
+  internal var endIndexAndFlags: UInt
 
   //===--- Non-essential bits ---------------------------------------------===//
 
-  public mutating func requestUniqueMutableBackingBuffer(
+  internal mutating func requestUniqueMutableBackingBuffer(
     minimumCapacity: Int
   ) -> NativeBuffer? {
     _invariantCheck()
@@ -149,8 +153,8 @@ struct _SliceBuffer<Element> : _ArrayBufferProtocol, RandomAccessCollection {
         let myCount = count
 
         if _slowPath(backingCount > myCount + offset) {
-          native.replace(
-            subRange: (myCount+offset)..<backingCount,
+          native.replaceSubrange(
+            (myCount+offset)..<backingCount,
             with: 0,
             elementsOf: EmptyCollection())
         }
@@ -161,18 +165,18 @@ struct _SliceBuffer<Element> : _ArrayBufferProtocol, RandomAccessCollection {
     return nil
   }
 
-  public mutating func isMutableAndUniquelyReferenced() -> Bool {
+  internal mutating func isMutableAndUniquelyReferenced() -> Bool {
     return _hasNativeBuffer && isUniquelyReferenced()
   }
 
-  public mutating func isMutableAndUniquelyReferencedOrPinned() -> Bool {
+  internal mutating func isMutableAndUniquelyReferencedOrPinned() -> Bool {
     return _hasNativeBuffer && isUniquelyReferencedOrPinned()
   }
 
   /// If this buffer is backed by a `_ContiguousArrayBuffer`
   /// containing the same number of elements as `self`, return it.
   /// Otherwise, return `nil`.
-  public func requestNativeBuffer() -> _ContiguousArrayBuffer<Element>? {
+  internal func requestNativeBuffer() -> _ContiguousArrayBuffer<Element>? {
     _invariantCheck()
     if _fastPath(_hasNativeBuffer && nativeBuffer.count == count) {
       return nativeBuffer
@@ -181,7 +185,7 @@ struct _SliceBuffer<Element> : _ArrayBufferProtocol, RandomAccessCollection {
   }
 
   @discardableResult
-  public func _copyContents(
+  internal func _copyContents(
     subRange bounds: Range<Int>,
     initializing target: UnsafeMutablePointer<Element>
   ) -> UnsafeMutablePointer<Element> {
@@ -190,17 +194,16 @@ struct _SliceBuffer<Element> : _ArrayBufferProtocol, RandomAccessCollection {
     _sanityCheck(bounds.upperBound >= bounds.lowerBound)
     _sanityCheck(bounds.upperBound <= endIndex)
     let c = bounds.count
-    target.initializeFrom(subscriptBaseAddress + bounds.lowerBound, count: c)
+    target.initialize(from: subscriptBaseAddress + bounds.lowerBound, count: c)
     return target + c
   }
 
   /// True, if the array is native and does not need a deferred type check.
-  var arrayPropertyIsNativeTypeChecked : Bool {
+  internal var arrayPropertyIsNativeTypeChecked: Bool {
     return _hasNativeBuffer
   }
 
-  public
-  var count: Int {
+  internal var count: Int {
     get {
       return endIndex - startIndex
     }
@@ -221,7 +224,7 @@ struct _SliceBuffer<Element> : _ArrayBufferProtocol, RandomAccessCollection {
       index >= startIndex && index < endIndex, "Index out of bounds")
   }
 
-  public var capacity: Int {
+  internal var capacity: Int {
     let count = self.count
     if _slowPath(!_hasNativeBuffer) {
       return count
@@ -234,18 +237,18 @@ struct _SliceBuffer<Element> : _ArrayBufferProtocol, RandomAccessCollection {
     return count
   }
 
-  mutating func isUniquelyReferenced() -> Bool {
-    return isUniquelyReferencedNonObjC(&owner)
+  internal mutating func isUniquelyReferenced() -> Bool {
+    return isKnownUniquelyReferenced(&owner)
   }
 
-  mutating func isUniquelyReferencedOrPinned() -> Bool {
-    return isUniquelyReferencedOrPinnedNonObjC(&owner)
+  internal mutating func isUniquelyReferencedOrPinned() -> Bool {
+    return _isKnownUniquelyReferencedOrPinned(&owner)
   }
 
   @_versioned
-  func getElement(_ i: Int) -> Element {
-    _sanityCheck(i >= startIndex, "negative slice index is out of range")
-    _sanityCheck(i < endIndex, "slice index out of range")
+  internal func getElement(_ i: Int) -> Element {
+    _sanityCheck(i >= startIndex, "slice index is out of range (before startIndex)")
+    _sanityCheck(i < endIndex, "slice index is out of range")
     return subscriptBaseAddress[i]
   }
 
@@ -253,18 +256,18 @@ struct _SliceBuffer<Element> : _ArrayBufferProtocol, RandomAccessCollection {
   ///
   /// - Precondition: `position` is a valid position in `self` and
   ///   `position != endIndex`.
-  public subscript(position: Int) -> Element {
+  internal subscript(position: Int) -> Element {
     get {
       return getElement(position)
     }
     nonmutating set {
-      _sanityCheck(position >= startIndex, "negative slice index is out of range")
-      _sanityCheck(position < endIndex, "slice index out of range")
+      _sanityCheck(position >= startIndex, "slice index is out of range (before startIndex)")
+      _sanityCheck(position < endIndex, "slice index is out of range")
       subscriptBaseAddress[position] = newValue
     }
   }
 
-  public subscript(bounds: Range<Int>) -> _SliceBuffer {
+  internal subscript(bounds: Range<Int>) -> _SliceBuffer {
     get {
       _sanityCheck(bounds.lowerBound >= startIndex)
       _sanityCheck(bounds.upperBound >= bounds.lowerBound)
@@ -284,14 +287,14 @@ struct _SliceBuffer<Element> : _ArrayBufferProtocol, RandomAccessCollection {
   /// The position of the first element in a non-empty collection.
   ///
   /// In an empty collection, `startIndex == endIndex`.
-  public var startIndex: Int
+  internal var startIndex: Int
 
   /// The collection's "past the end" position---that is, the position one
   /// greater than the last valid subscript argument.
   ///
   /// `endIndex` is always reachable from `startIndex` by zero or more
   /// applications of `index(after:)`.
-  public var endIndex: Int {
+  internal var endIndex: Int {
     get {
       return Int(endIndexAndFlags >> 1)
     }
@@ -300,14 +303,13 @@ struct _SliceBuffer<Element> : _ArrayBufferProtocol, RandomAccessCollection {
     }
   }
 
-  public typealias Indices = CountableRange<Int>
+  internal typealias Indices = CountableRange<Int>
 
   //===--- misc -----------------------------------------------------------===//
   /// Call `body(p)`, where `p` is an `UnsafeBufferPointer` over the
   /// underlying contiguous storage.
-  public
-  func withUnsafeBufferPointer<R>(
-    _ body: @noescape (UnsafeBufferPointer<Element>) throws -> R
+  internal func withUnsafeBufferPointer<R>(
+    _ body: (UnsafeBufferPointer<Element>) throws -> R
   ) rethrows -> R {
     defer { _fixLifetime(self) }
     return try body(UnsafeBufferPointer(start: firstElementAddress,
@@ -316,9 +318,8 @@ struct _SliceBuffer<Element> : _ArrayBufferProtocol, RandomAccessCollection {
 
   /// Call `body(p)`, where `p` is an `UnsafeMutableBufferPointer`
   /// over the underlying contiguous storage.
-  public
-  mutating func withUnsafeMutableBufferPointer<R>(
-    _ body: @noescape (UnsafeMutableBufferPointer<Element>) throws -> R
+  internal mutating func withUnsafeMutableBufferPointer<R>(
+    _ body: (UnsafeMutableBufferPointer<Element>) throws -> R
   ) rethrows -> R {
     defer { _fixLifetime(self) }
     return try body(
@@ -327,19 +328,19 @@ struct _SliceBuffer<Element> : _ArrayBufferProtocol, RandomAccessCollection {
 }
 
 extension _SliceBuffer {
-  public func _copyToNativeArrayBuffer() -> _ContiguousArrayBuffer<Element> {
+  internal func _copyToContiguousArray() -> ContiguousArray<Element> {
     if _hasNativeBuffer {
       let n = nativeBuffer
       if count == n.count {
-        return n
+        return ContiguousArray(_buffer: n)
       }
     }
 
     let result = _ContiguousArrayBuffer<Element>(
-      uninitializedCount: count,
+      _uninitializedCount: count,
       minimumCapacity: 0)
-    result.firstElementAddress.initializeFrom(
-      firstElementAddress, count: count)
-    return result
+    result.firstElementAddress.initialize(
+      from: firstElementAddress, count: count)
+    return ContiguousArray(_buffer: result)
   }
 }
